@@ -1,11 +1,10 @@
 #[macro_use]
 pub mod common;
 
-use gramma::lex::{Eof, RealDecimal, StringToken, Token, TokenRef, Whitespace};
-use gramma::{grammar, tokens};
 use common::unwrap_display;
+use gramma::lex::{Eof, RealDecimal, StringToken, Whitespace};
+use gramma::{grammar, tokens};
 use std::collections::BTreeMap;
-use std::ops::Range;
 use std::str::FromStr;
 
 tokens! {
@@ -18,7 +17,7 @@ tokens! {
     pub struct True => symbol("true");
     pub struct False => symbol("false");
     pub struct Null => symbol("null");
-    pub enum MyToken => {
+    pub enum JsonToken => {
         | LBrace | RBrace
         | LBracket | RBracket
         | Colon
@@ -33,8 +32,7 @@ tokens! {
     };
 }
 
-grammar! {
-    MyToken;
+grammar! { JsonToken;
     pub struct Kvp => { key: StringToken, Colon, value: Value };
     pub struct List => { LBracket, vals: [(Value)(Comma)*], RBracket };
     pub struct Object => { LBrace, vals: [(Kvp)(Comma)*], RBrace };
@@ -61,39 +59,30 @@ enum JsonValue {
 }
 
 fn parse(src: &str) -> JsonValue {
-    fn parse_string<'a>(src: &str, token: impl Into<TokenRef<'a, StringToken>>) -> String {
-        let Range { start, end } = token.into().range;
-        src[start + 1..end - 1].to_string()
-    }
-
-    fn parse_num<'a>(src: &str, token: impl Into<TokenRef<'a, RealDecimal>>) -> f64 {
-        f64::from_str(&src[token.into().range.clone()]).unwrap()
-    }
-
-    fn parse_kvp(src: &str, tokens: &[Token<MyToken>], tree: &Kvp) -> (String, JsonValue) {
-        let key = parse_string(src, tree.key.index.lookup(tokens));
-        let value = inner(src, tokens, &tree.value);
+    fn parse_kvp(src: &str, tree: &Kvp) -> (String, JsonValue) {
+        let key = tree.key.inner_str(src).to_string();
+        let value = inner(src, &tree.value);
         (key, value)
     }
 
-    fn inner(src: &str, tokens: &[Token<MyToken>], tree: &Value) -> JsonValue {
+    fn inner(src: &str, tree: &Value) -> JsonValue {
         match tree {
             Value::Object(Object { vals, .. }) => {
-                JsonValue::Object(vals.iter().map(|kvp| parse_kvp(src, tokens, kvp)).collect())
+                JsonValue::Object(vals.iter().map(|kvp| parse_kvp(src, kvp)).collect())
             }
             Value::List(List { vals, .. }) => {
-                JsonValue::List(vals.iter().map(|v| inner(src, tokens, v)).collect())
+                JsonValue::List(vals.iter().map(|v| inner(src, v)).collect())
             }
-            Value::String(s) => JsonValue::String(parse_string(src, s.index.lookup(tokens))),
-            Value::Number(n) => JsonValue::Number(parse_num(src, n.index.lookup(tokens))),
+            Value::String(s) => JsonValue::String(s.inner_str(src).to_string()),
+            Value::Number(n) => JsonValue::Number(f64::from_str(n.get_str(src)).unwrap()),
             Value::Bool(Bool::True(..)) => JsonValue::Bool(true),
             Value::Bool(Bool::False(..)) => JsonValue::Bool(false),
             Value::Null(..) => JsonValue::Null,
         }
     }
 
-    let (tokens, ast) = unwrap_display(gramma::parse(src));
-    inner(src, &tokens, &ast)
+    let (_, ast) = unwrap_display(gramma::parse(src));
+    inner(src, &ast)
 }
 
 macro_rules! object {
@@ -174,6 +163,7 @@ impl<T: Into<JsonValue>> From<Option<T>> for JsonValue {
 
 #[test]
 fn parse_json() {
+    parse("{ }");
     let expected = json!({
         "x" => "x",
         "y" => ["z", [], { "a" => ["c"], "d" => 3.5 }],
@@ -181,13 +171,12 @@ fn parse_json() {
         "w" => [true, null, 4.0, false],
     });
 
-    let src = "\
-    {
-        \"x\": \"x\",
-        \"y\": [\"z\", [], {\"a\":[\"c\"], \"d\": 3.5}],
-        \"z\": {},
-        \"w\": [true, null, 4, false]
-    }";
+    let src = r#"{
+        "x": "x",
+        "y": ["z", [], {"a":["c"], "d": 3.5}],
+        "z": {},
+        "w": [true, null, 4, false]
+    }"#;
 
     assert_eq!(parse(src), expected);
 }

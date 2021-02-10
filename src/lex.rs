@@ -4,60 +4,41 @@
 use std::convert::TryInto;
 use std::fmt::{self, Display};
 use std::marker::PhantomData;
+use std::ops::Add;
 use std::ops::Range;
 
-/// Contains a token value and the range it covers in the original string.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Token<T> {
-    pub value: T,
-    pub range: Range<usize>,
-}
-
-impl<T: BasicTokenValue> Token<T> {
-    pub fn token_repr(&self, src: &str) -> String {
-        self.value.token_repr(&src[self.range.clone()])
-    }
-}
-
-impl<'a, T: TokenValue> From<&'a Token<T>> for TokenRef<'a, T> {
-    fn from(other: &'a Token<T>) -> Self {
-        Self {
-            value: &other.value,
-            range: other.range.clone(),
-        }
-    }
-}
-
 /// Methods for tokens that can be used in a trait object
-pub trait BasicTokenValue: std::fmt::Debug {
+pub trait BasicToken: std::fmt::Debug {
+    fn range(&self) -> Range<usize>;
+    fn inner_range(&self) -> Range<usize> {
+        self.range()
+    }
     fn should_ignore(&self) -> bool {
         false
     }
-    fn token_repr(&self, src_slice: &str) -> String {
-        format!("'{}'", src_slice)
+    fn token_repr(&self, src: &str) -> String {
+        format!("'{}'", &src[self.range()])
     }
 }
+
 // Methods for token types that can be recognized.
-pub trait TokenValue: Sized + Clone + BasicTokenValue + 'static {
-    fn recognize(src: &str) -> Option<(Self, usize)>;
+pub trait Token: Sized + Clone + BasicToken {
+    fn recognize(src: &str, start: usize) -> Option<Self>;
     fn token_type_repr() -> String;
 }
 
-/// Alias for tokens with boxed dynamic values.
-pub type AnyToken = Token<Box<dyn BasicTokenValue>>;
-
-/// Contains a reference to a partiular token value, along with the range it covers.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct TokenRef<'a, T: TokenValue> {
-    pub value: &'a T,
-    pub range: Range<usize>,
+pub trait InnerRangeToken: Token {
+    fn inner_range(&self) -> Range<usize>;
 }
+
+/// Alias for tokens with boxed dynamic values.
+pub type AnyToken = Box<dyn BasicToken>;
 
 /// Index for a particular type of token value
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
-pub struct TokenIndex<T: TokenValue>(pub usize, PhantomData<T>);
+pub struct TokenIndex<T>(pub usize, PhantomData<T>);
 
-impl<T: TokenValue> TokenIndex<T> {
+impl<T> TokenIndex<T> {
     /// Creates a new instance referring to the given index.
     pub fn new(index: usize) -> Self {
         Self(index, PhantomData)
@@ -65,51 +46,31 @@ impl<T: TokenValue> TokenIndex<T> {
 
     /// Returns a reference to the token at this index.
     /// Panics if the token is the wrong type.
-    pub fn lookup<'a, U: TokenValue, A: ?Sized>(&self, tokens: &'a A) -> TokenRef<'a, T>
+    pub fn lookup<'a, U: 'a, A: ?Sized>(&self, tokens: &'a A) -> Option<&'a T>
     where
-        A: std::ops::Index<usize, Output = Token<U>>,
+        A: std::ops::Index<usize, Output = U>,
         &'a U: TryInto<&'a T>,
     {
-        let token = &tokens[self.0];
-        let value = (&token.value)
-            .try_into()
-            .map_err(|_| {
-                format!(
-                    "Unable to convert {:?} to {:?}.",
-                    &tokens[self.0],
-                    std::any::type_name::<T>(),
-                )
-            })
-            .unwrap();
-        TokenRef {
-            value,
-            range: token.range.clone(),
-        }
-    }
-}
-
-impl<T: BasicTokenValue + 'static + Sized> From<Token<T>> for AnyToken {
-    fn from(other: Token<T>) -> Self {
-        Self {
-            value: Box::new(other.value),
-            range: other.range,
-        }
+        (&tokens[self.0]).try_into().ok()
     }
 }
 
 /// Token that matches only the empty string. Used to mark the end of the input string.
 ///
 /// ```
-/// use gramma::lex::{Eof, TokenValue};
+/// use gramma::lex::{BasicToken, Eof, Token};
 ///
-/// assert_eq!(Eof::recognize("").unwrap(), (Eof, 0));
-/// assert_eq!(Eof::recognize("foo"), None);
+/// assert_eq!(Eof::recognize("", 0).unwrap().range(), 0..0);
+/// assert_eq!(Eof::recognize("foo", 0), None);
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
-pub struct Eof;
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Eof(pub usize);
 crate::_impl_parse_for_token!(Eof);
 
-impl BasicTokenValue for Eof {
+impl BasicToken for Eof {
+    fn range(&self) -> Range<usize> {
+        self.0..self.0
+    }
     fn should_ignore(&self) -> bool {
         false
     }
@@ -118,10 +79,10 @@ impl BasicTokenValue for Eof {
     }
 }
 
-impl TokenValue for Eof {
-    fn recognize(src: &str) -> Option<(Self, usize)> {
-        if src.len() == 0 {
-            Some((Self, 0))
+impl Token for Eof {
+    fn recognize(src: &str, start: usize) -> Option<Self> {
+        if start == src.len() {
+            Some(Self(start))
         } else {
             None
         }
@@ -135,20 +96,23 @@ impl TokenValue for Eof {
 /// Will generally be ignored by a parser
 ///
 /// ```
-/// use gramma::lex::{TokenValue, Whitespace};
+/// use gramma::lex::{BasicToken, Token, Whitespace};
 ///
 /// // matches a single space:
-/// assert_eq!(Whitespace::recognize(" ").unwrap(), (Whitespace, 1));
+/// assert_eq!(Whitespace::recognize(" ", 0).unwrap().range(), 0..1);
 /// // matches multiple spaces:
-/// assert_eq!(Whitespace::recognize("\t \ndone").unwrap(), (Whitespace, 3));
+/// assert_eq!(Whitespace::recognize("\t \ndone", 0).unwrap().range(), 0..3);
 /// // does not match the empty string:
-/// assert_eq!(Whitespace::recognize(""), None);
+/// assert_eq!(Whitespace::recognize("", 0), None);
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct Whitespace;
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Whitespace(pub Range<usize>);
 crate::_impl_parse_for_token!(Whitespace);
 
-impl BasicTokenValue for Whitespace {
+impl BasicToken for Whitespace {
+    fn range(&self) -> Range<usize> {
+        self.0.clone()
+    }
     fn should_ignore(&self) -> bool {
         true
     }
@@ -157,11 +121,15 @@ impl BasicTokenValue for Whitespace {
     }
 }
 
-impl TokenValue for Whitespace {
-    fn recognize(src: &str) -> Option<(Self, usize)> {
-        let len = src.chars().take_while(|c| c.is_whitespace()).count();
-        if len > 0 {
-            Some((Self, len))
+impl Token for Whitespace {
+    fn recognize(src: &str, start: usize) -> Option<Self> {
+        let end = src[start..]
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .map(char::len_utf8)
+            .fold(start, Add::add);
+        if end > start {
+            Some(Self(start..end))
         } else {
             None
         }
@@ -171,7 +139,10 @@ impl TokenValue for Whitespace {
     }
 }
 
-impl<T: BasicTokenValue> BasicTokenValue for Box<T> {
+impl<T: BasicToken> BasicToken for Box<T> {
+    fn range(&self) -> Range<usize> {
+        <T as BasicToken>::range(self)
+    }
     fn should_ignore(&self) -> bool {
         T::should_ignore(self)
     }
@@ -180,82 +151,12 @@ impl<T: BasicTokenValue> BasicTokenValue for Box<T> {
     }
 }
 
-impl<T: TokenValue> TokenValue for Box<T> {
-    fn recognize(src: &str) -> Option<(Self, usize)> {
-        let (token, len) = T::recognize(src)?;
-        Some((Box::new(token), len))
+impl<T: Token> Token for Box<T> {
+    fn recognize(src: &str, start: usize) -> Option<Self> {
+        T::recognize(src, start).map(Box::new)
     }
     fn token_type_repr() -> String {
         T::token_type_repr()
-    }
-}
-
-/// token that matches string literals.
-/// strings may start with a double or single quote, or a backtick
-/// the quote character may be excaped by a backslash.
-///
-/// ```
-/// use gramma::lex::{StringToken, TokenValue};
-///
-/// assert_eq!(
-///     StringToken::recognize("'single quote'").unwrap(),
-///     (StringToken { quote_char: '\'', inner_range: 1..13 }, 14),
-/// );
-/// assert_eq!(
-///     StringToken::recognize("\"double quote\" ...").unwrap(),
-///     (StringToken { quote_char: '"', inner_range: 1..13 }, 14),
-/// );
-/// assert_eq!(
-///     StringToken::recognize("`backticks`").unwrap(),
-///     (StringToken { quote_char: '`', inner_range: 1..10 }, 11),
-/// );
-/// assert_eq!(StringToken::recognize("\"unclosed"), None);
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StringToken {
-    pub quote_char: char,
-    pub inner_range: Range<usize>,
-}
-crate::_impl_parse_for_token!(StringToken);
-
-impl BasicTokenValue for StringToken {
-    fn should_ignore(&self) -> bool {
-        false
-    }
-    fn token_repr(&self, _: &str) -> String {
-        Self::token_type_repr()
-    }
-}
-
-impl TokenValue for StringToken {
-    fn recognize(src: &str) -> Option<(Self, usize)> {
-        let mut chars = src.char_indices();
-        let (_, first) = chars.next()?;
-
-        let mut last = match first {
-            '"' | '\'' | '`' => first,
-            _ => return None,
-        };
-
-        for (i, cur) in chars {
-            if cur == first && last != '\\' {
-                return Some((
-                    Self {
-                        quote_char: first,
-                        inner_range: first.len_utf8()..i,
-                    },
-                    i + cur.len_utf8(),
-                ));
-            }
-
-            last = cur;
-        }
-
-        return None;
-    }
-
-    fn token_type_repr() -> String {
-        "string".to_string()
     }
 }
 
@@ -264,33 +165,60 @@ crate::tokens! {
     /// Integer literal in base 10.
     ///
     /// ```
-    /// use gramma::lex::{IntDecimal, TokenValue};
+    /// use gramma::lex::{BasicToken, IntDecimal, Token};
     ///
-    /// assert!(matches!(IntDecimal::recognize("123").unwrap(), (IntDecimal(..), 3)));
-    /// assert_eq!(IntDecimal::recognize("abc"), None);
+    /// assert_eq!(IntDecimal::recognize("123", 0).unwrap().range(), 0..3);
+    /// assert_eq!(IntDecimal::recognize("abc", 0), None);
     /// ```
     pub struct IntDecimal => regex("integer literal", r"^-?\d+");
 
     /// Numeric literal in base 10 with an optional fractional part.
     ///
     /// ```
-    /// use gramma::lex::{RealDecimal, TokenValue};
+    /// use gramma::lex::{BasicToken, RealDecimal, Token};
     ///
-    /// assert!(matches!(RealDecimal::recognize("123").unwrap(), (RealDecimal(..), 3)));
-    /// assert!(matches!(RealDecimal::recognize("123.456").unwrap(), (RealDecimal(..), 7)));
-    /// assert_eq!(RealDecimal::recognize("abc"), None);
+    /// assert_eq!(RealDecimal::recognize("123", 0).unwrap().range(), 0..3);
+    /// assert_eq!(RealDecimal::recognize("123.456", 0).unwrap().range(), 0..7);
+    /// assert_eq!(RealDecimal::recognize("abc", 0), None);
     /// ```
     pub struct RealDecimal => regex("real literal", r"^-?(\d*\.\d+|\d+)");
 
     /// Sequence of any ASCII letter, digit, or underscore, except the first character cannot be a digit
     ///
     /// ```
-    /// use gramma::lex::{Identifier, TokenValue};
+    /// use gramma::lex::{BasicToken, Identifier, Token};
     ///
-    /// assert!(matches!(Identifier::recognize("abc_123 ...").unwrap(), (Identifier(..), 7)));
-    /// assert_eq!(Identifier::recognize("123abc"), None);
+    /// assert_eq!(Identifier::recognize("abc_123 ...", 0).unwrap().range(), 0..7);
+    /// assert_eq!(Identifier::recognize("123abc", 0), None);
     /// ```
     pub struct Identifier => regex("identifier", r"^[a-zA-Z_][a-zA-Z_0-9]*");
+
+    /// Token that matches string literals.
+    /// Strings may start with a double or single quote.
+    /// The quote character may be excaped by a backslash.
+    ///
+    /// ```
+    /// use gramma::lex::{StringToken, Token};
+    ///
+    /// assert_eq!(
+    ///     StringToken::recognize("'single quote'", 0),
+    ///     Some(StringToken(0..14, 1..13)),
+    /// );
+    /// assert_eq!(
+    ///     StringToken::recognize(r#""double quote" ..."#, 0),
+    ///     Some(StringToken(0..14, 1..13)),
+    /// );
+    /// assert_eq!(
+    ///     StringToken::recognize(r#""escape \"this\" quote""#, 0),
+    ///     Some(StringToken(0..23, 1..22)),
+    /// );
+    /// assert_eq!(StringToken::recognize("\"unclosed", 0), None);
+    /// ```
+    pub struct StringToken => regex(
+        "string",
+        r#"^"((\\"|[^"])*)""# => m => (m.get(0), m.get(1)),
+        r"'((\\'|[^'])*)'" => m => (m.get(0), m.get(1)),
+    );
 }
 
 /// Error type for tokenization.
@@ -313,25 +241,49 @@ impl Display for TokenError {
 
 impl std::error::Error for TokenError {}
 
+/// Helper that lets us accept either a capture or pair of captures in a regex token expression.
+#[doc(Hidden)]
+pub struct FirstOptional<T>(pub T, pub T);
+
+impl<T: Clone> From<T> for FirstOptional<T> {
+    fn from(src: T) -> Self {
+        Self(src.clone(), src)
+    }
+}
+
+impl<T> From<(T, T)> for FirstOptional<T> {
+    fn from((a, b): (T, T)) -> Self {
+        Self(a, b)
+    }
+}
+
 /// Converts a string to a Vec of tokens of type `T`.
+/// Returns the tokens and the index of the string where tokenization stopped.
 /// Returns `Err(TokenError::Unreadable)` if part of the string does not match any token
-pub fn tokenize<T: TokenValue>(mut src: &str) -> Result<Vec<Token<T>>, TokenError> {
+pub fn tokenize<T: Token>(src: &str) -> Result<(Vec<T>, usize), TokenError> {
     let mut index = 0;
     let mut tokens = Vec::new();
 
-    while let Some((token, len)) = T::recognize(src) {
-        tokens.push(Token {
-            value: token,
-            range: index..index + len,
-        });
-        if src.is_empty() {
-            return Ok(tokens);
+    while let Some(token) = T::recognize(src, index) {
+        let range = token.range();
+        index = range.end;
+        tokens.push(token);
+
+        if range.len() == 0 {
+            // probably hit EOF
+            return Ok((tokens, index));
         }
-        src = &src[len..];
-        index += len;
+
+        if index > src.len() {
+            panic!("Read past end of string while tokenizing.");
+        }
     }
 
-    Err(TokenError::Unreadable { at: index })
+    if index == src.len() {
+        Ok((tokens, index))
+    } else {
+        Err(TokenError::Unreadable { at: index })
+    }
 }
 
 #[doc(hidden)]
@@ -356,10 +308,22 @@ macro_rules! _tokens {
     };
     // syntax for regex tokens
     // matches strings that match the given regex. Hopefully the regex begins with '^'
-    (@rule $m:ident $(#[$meta:meta])* $vis:vis struct $name:ident => regex($repr:literal, $reg:literal $(,)?); $($rest:tt)*) => {
-        $crate::_tokens!(@m $m regex ($vis $name $repr $reg ($(#[$meta])*) ));
+    {
+        @rule $m:ident
+        $(#[$meta:meta])* $vis:vis struct $name:ident => regex(
+            $repr:literal, $($reg:expr $(=> $caps:ident => $expr:expr)?),+ $(,)?
+        );
+            $($rest:tt)*
+    } => {
+        $crate::_tokens!(@m $m regex ($vis, $name, $repr, [$(($reg $(=>$caps=>$expr)?))+] ($(#[$meta])*) ));
         $crate::_tokens!(@rule $m $($rest)*);
     };
+    {
+        @rule $m:ident
+        $(#[$meta:meta])* $vis:vis struct $name:ident => string(
+            $repr:literal,
+        );
+    } => {};
 
     // implementation for union tokens:
     (@m token enum ($vis:vis $name:ident ($(#[$meta:meta])*) [ $(($v:ident : $ty:ty))* ])) => {
@@ -368,26 +332,32 @@ macro_rules! _tokens {
         $vis enum $name {
             $($v($ty),)*
         }
-        impl $crate::lex::BasicTokenValue for $name {
+        impl $crate::lex::BasicToken for $name {
+            fn range(&self) -> std::ops::Range<usize> {
+                match self {
+                    $(Self::$v(x) => x.range(),)*
+                }
+            }
             fn should_ignore(&self) -> bool {
                 match self {
                     $(Self::$v(x) => x.should_ignore(),)*
                 }
             }
         }
-        impl $crate::lex::TokenValue for $name {
-            fn recognize(src: &str) -> Option<(Self, usize)> {
-                fn convert<T: Into<$name>>((token, len): (T, usize)) -> ($name, usize) {
-                    (token.into(), len)
-                }
-
-                let mut best: Option<(Self, usize)> = None;
+        impl $crate::lex::Token for $name {
+            fn recognize(src: &str, start: usize) -> Option<Self> {
+                use $crate::lex::{BasicToken, Token};
+                let mut best: Option<Self> = None;
                 $(
-                    best = match (best, <$ty as $crate::lex::TokenValue>::recognize(src).map(convert)) {
+                    best = match (best, <$ty as Token>::recognize(src, start).map(Into::into)) {
                         (None, t) => t,
                         (t, None) => t,
-                        (Some((t1, l1)), Some((t2, l2))) => {
-                            if l2 > l1 { Some((t2, l2)) } else { Some((t1, l1)) }
+                        (Some(t1), Some(t2)) => {
+                            if BasicToken::range(&t2).end > BasicToken::range(&t1).end {
+                                Some(t2)
+                            } else {
+                                Some(t1)
+                            }
                         }
                     };
                 )*
@@ -429,13 +399,16 @@ macro_rules! _tokens {
     (@m token sym ($vis:vis $name:ident $lit:literal ($(#[$meta:meta])*) (ignore=$ignore:expr))) => {
         $(#[$meta])*
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-        $vis struct $name;
-        impl $crate::lex::BasicTokenValue for $name {
+        $vis struct $name(pub usize);
+        impl $crate::lex::BasicToken for $name {
+            fn range(&self) -> std::ops::Range<usize> {
+                self.0..self.0 + $lit.len()
+            }
             fn should_ignore(&self) -> bool { $ignore }
         }
-        impl $crate::lex::TokenValue for $name {
-            fn recognize(src: &str) -> Option<(Self, usize)> {
-                if src.starts_with($lit) { Some(($name, $lit.len())) } else { None }
+        impl $crate::lex::Token for $name {
+            fn recognize(src: &str, start: usize) -> Option<Self> {
+                if src[start..].starts_with($lit) { Some($name(start)) } else { None }
             }
             fn token_type_repr() -> std::string::String {
                 concat!("'", $lit, "'").to_string()
@@ -444,18 +417,39 @@ macro_rules! _tokens {
         $crate::_impl_parse_for_token!($name);
     };
     // implementation for regex tokens:
-    (@m token regex ($vis:vis $name:ident $repr:literal $reg:literal ($(#[$meta:meta])*))) => {
+    {
+        @m token regex (
+            $vis:vis, $name:ident, $repr:literal,
+            [$(($reg:expr $(=> $caps:pat => $expr:expr)?))+]
+            ($(#[$meta:meta])*)
+        )
+    } => {
         $(#[$meta])*
         #[derive(Clone, PartialEq, Eq, Debug)]
-        $vis struct $name(pub std::ops::Range<usize>);
-        impl $crate::lex::BasicTokenValue for $name {}
-        impl $crate::lex::TokenValue for $name {
-            fn recognize(src: &str) -> Option<(Self, usize)> {
-                $crate::lazy_static::lazy_static! {
-                    static ref RE: $crate::regex::Regex = $crate::regex::Regex::new($reg).unwrap();
-                }
-                let found = RE.find(src)?;
-                Some((Self(found.range()), found.end()))
+        $vis struct $name(pub std::ops::Range<usize>, pub std::ops::Range<usize>);
+
+        impl $crate::lex::BasicToken for $name {
+            fn range(&self) -> std::ops::Range<usize> {
+                self.0.clone()
+            }
+            fn inner_range(&self) -> std::ops::Range<usize> {
+                self.1.clone()
+            }
+        }
+
+        impl $crate::lex::Token for $name {
+            fn recognize(src: &str, start: usize) -> Option<Self> {
+                let src = &src[start..];
+                $(
+                    if let Some((outer, inner)) = $crate::_tokens!(@regex src, $reg $(=> $caps => $expr)?) {
+                        let end = outer.end + start;
+                        let inner_start = inner.start + start;
+                        let inner_end = inner.end + start;
+                        return Some(Self(start..end, inner_start..inner_end))
+                    }
+                )+
+
+                None
             }
             fn token_type_repr() -> std::string::String {
                 $repr.to_string()
@@ -471,6 +465,26 @@ macro_rules! _tokens {
     // @default: helper that replaces an empty token list with the given tokens
     (@default () ($($def:tt)*)) => {$($def)*};
     (@default ($($val:tt)+) ($($def:tt)*)) => {$($val)*};
+
+    (@regex $s:expr, $reg:expr $(=> $caps:pat => $expr:expr )?) => {{
+        $crate::lazy_static::lazy_static! {
+            static ref RE: $crate::regex::Regex = $crate::regex::Regex::new($reg).unwrap();
+        }
+        if let Some(captures) = RE.captures($s) {
+            if let $crate::lex::FirstOptional(Some(a), Some(b)) = $crate::_tokens!(@default ($({
+                let $caps = captures;
+                ($expr).into()
+            })?) (
+                captures.get(0).into()
+            )) {
+                Some((a.range(), b.range()))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }};
 
     // catch all invalid token definitions:
     (@rule $($rest:tt)*) => {compile_error!(stringify!(invalid rule: $($rest)*));};
@@ -496,7 +510,7 @@ macro_rules! _tokens {
  * Keyword and symbol tokens (tokens that match an exact string) may be defined as follows:
  *
  * ```
- *  use gramma::lex::TokenValue;
+ *  use gramma::lex::{BasicToken, Token};
  *  use gramma::tokens;
  *
  *  tokens! {
@@ -504,11 +518,11 @@ macro_rules! _tokens {
  *      struct Plus => symbol("+");
  *  }
  *
- *  assert!(matches!(True::recognize("true"), Some((True, 4))));
+ *  assert_eq!(True::recognize("true", 0).unwrap().range(), 0..4);
  *  // matches just the length of the symbol (in this case 1):
- *  assert!(matches!(Plus::recognize("+1234"), Some((Plus, 1))));
+ *  assert_eq!(Plus::recognize("+1234", 0).unwrap().range(), 0..1);
  *  // returns None when the beginning of the string does not match the token.
- *  assert!(matches!(True::recognize("false, true"), None));
+ *  assert_eq!(True::recognize("false, true", 0), None);
  * ```
  *
  * ### Regular expressions
@@ -519,15 +533,15 @@ macro_rules! _tokens {
  * It will be used when displaying error messages when this kind of token is expected during parsing.
  *
  * ```
- *  use gramma::lex::TokenValue;
+ *  use gramma::lex::{BasicToken, Token};
  *  use gramma::tokens;
  *
  *  tokens! {
  *      struct MyIdent => regex("identifier", r"^[a-zA-Z_][a-zA-Z_0-9]*");
  *  }
  *
- *  assert!(matches!(MyIdent::recognize("foo123"), Some((MyIdent(..), 6))));
- *  assert!(matches!(MyIdent::recognize("123bar"), None));
+ *  assert_eq!(MyIdent::recognize("foo123", 0).unwrap().range(), 0..6);
+ *  assert_eq!(MyIdent::recognize("123bar", 0), None);
  * ```
  *
  * ### Unions
@@ -540,7 +554,7 @@ macro_rules! _tokens {
  *
  * ```
  *  use gramma::tokens;
- *  use gramma::lex::TokenValue;
+ *  use gramma::lex::Token;
  *  # tokens! {
  *      # struct True => symbol("true");
  *      # struct Plus => symbol("+");
@@ -556,16 +570,16 @@ macro_rules! _tokens {
  *  }
  *
  *  // Notice how True takes precedence over MyIdent even though it matches both.
- *  assert!(matches!(MyToken::recognize("true"), Some((MyToken::True(..), 4))));
- *  assert!(matches!(MyToken::recognize("+"), Some((MyToken::Plus(..), 1))));
+ *  assert!(matches!(MyToken::recognize("true", 0), Some(MyToken::True(..))));
+ *  assert!(matches!(MyToken::recognize("+", 0), Some(MyToken::Plus(..))));
  *  // Notice how MyIdent takes precedence over True because the string it matches is longer.
- *  assert!(matches!(MyToken::recognize("truer"), Some((MyToken::Ident(..), 5))));
+ *  assert!(matches!(MyToken::recognize("truer", 0), Some(MyToken::Ident(..))));
  * ```
  *
  * ## Example
  *
  * ```
- *  use gramma::lex::{tokenize, Whitespace, Eof};
+ *  use gramma::lex::{tokenize, Whitespace, Eof, BasicToken};
  *  use gramma::tokens;
  *
  *  tokens! {
@@ -585,16 +599,16 @@ macro_rules! _tokens {
  *      };
  *  }
  *
- *  let tokens = tokenize::<MyToken>("(+ 12 (- 345 6))").unwrap();
- *  assert!(matches![tokens[0].value, MyToken::LParen(..)]);
- *  assert!(matches![tokens[1].value, MyToken::Plus(..)]);
- *  assert!(matches![tokens[2].value, MyToken::Whitespace(..)]);
- *  assert!(matches![tokens[3].value, MyToken::Num(..)]);
+ *  let tokens = tokenize::<MyToken>("(+ 12 (- 345 6))").unwrap().0;
+ *  assert!(matches![tokens[0], MyToken::LParen(..)]);
+ *  assert!(matches![tokens[1], MyToken::Plus(..)]);
+ *  assert!(matches![tokens[2], MyToken::Whitespace(..)]);
+ *  assert!(matches![tokens[3], MyToken::Num(..)]);
  *
- *  assert_eq!(tokens[0].range, 0..1);
- *  assert_eq!(tokens[1].range, 1..2);
- *  assert_eq!(tokens[2].range, 2..3);
- *  assert_eq!(tokens[3].range, 3..5);
+ *  assert_eq!(tokens[0].range(), 0..1);
+ *  assert_eq!(tokens[1].range(), 1..2);
+ *  assert_eq!(tokens[2].range(), 2..3);
+ *  assert_eq!(tokens[3].range(), 3..5);
  * ```
  */
 #[macro_export]

@@ -73,7 +73,7 @@ macro_rules! _grammar {
                 ::Parser;
             type Output = Self;
             fn begin_parse(
-                tokens: &'a [$crate::lex::Token<$token>],
+                tokens: &'a [$token],
                 index: usize,
             ) -> $crate::parse::ParseResult<(Self::Parser, usize)>{
                 Self::Parser::new(tokens, index)
@@ -138,7 +138,7 @@ macro_rules! _grammar {
             type Output = Self;
 
             fn begin_parse(
-                tokens: &'a [$crate::lex::Token<$token>],
+                tokens: &'a [$token],
                 index: usize,
             ) -> $crate::parse::ParseResult<(Self::Parser, usize)> {
                 Self::Parser::new(tokens, index)
@@ -439,16 +439,16 @@ macro_rules! grammar {
 #[macro_export]
 macro_rules! _impl_parse_for_token {
     ($ty:ty) => {
-        impl<'a, T: $crate::lex::TokenValue> $crate::parse::BeginParse<'a, T> for $ty
+        impl<'a, T: $crate::lex::BasicToken + Clone> $crate::parse::BeginParse<'a, T> for $ty
         where
-            for<'b> &'b $ty: std::convert::TryFrom<&'b T>,
+            T: std::convert::TryInto<$ty>,
         {
             type Parser =
                 <$crate::parse::TokenAst<Self> as $crate::parse::BeginParse<'a, T>>::Parser;
             type Output = $crate::parse::TokenAst<Self>;
 
             fn begin_parse(
-                tokens: &'a [$crate::lex::Token<T>],
+                tokens: &'a [T],
                 index: usize,
             ) -> $crate::parse::ParseResult<(Self::Parser, usize)> {
                 $crate::parse::TokenAst::<Self>::begin_parse(tokens, index)
@@ -463,7 +463,7 @@ macro_rules! _impl_parse_for_token {
 macro_rules! _impl_parseable {
     ($token:ty, $ty:ty) => {
         impl $crate::parse::Parseable<$token> for $ty {
-            fn parse(tokens: &[$crate::lex::Token<$token>]) -> $crate::parse::ParseResult<Self> {
+            fn parse(tokens: &[$token]) -> $crate::parse::ParseResult<Self> {
                 let parser = <Self as $crate::parse::BeginParse<$token>>::begin_parse(tokens, 0)?.0;
                 Ok($crate::parse::Parse::accept(parser))
             }

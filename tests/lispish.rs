@@ -1,8 +1,8 @@
 #[macro_use]
 pub mod common;
 
-use common::{token_slice, unwrap_display};
-use gramma::lex::{Eof, RealDecimal, StringToken, Token, Whitespace};
+use common::unwrap_display;
+use gramma::lex::{Eof, RealDecimal, StringToken, Whitespace};
 use gramma::{grammar, tokens};
 
 tokens! {
@@ -54,30 +54,26 @@ grammar! { LispishToken;
     pub struct Lispish => { value: Expr, Eof };
 }
 
-fn parse(src: &str) -> (Vec<Token<LispishToken>>, Lispish) {
-    unwrap_display(gramma::parse(src))
-}
-
 #[test]
 fn parse_lispish() {
     use Expr as E;
 
     let src = "{ foo-123+4 (bar 1 [baz 2.0 true \"hi\"]) qux }";
-    let (tokens, actual) = parse(src);
+    let (_, actual) = unwrap_display(gramma::parse::<LispishToken, Lispish>(src));
 
     match_assert!(E::Call(v) = &actual.value =>
         match_assert!([E::Id(a), E::Call(b), E::Id(c)] = &v.vals[..] => {
-            assert_eq!("foo-123+4", token_slice(src, &tokens, &a));
-            assert_eq!("qux", token_slice(src, &tokens, &c));
+            assert_eq!("foo-123+4", a.get_str(src));
+            assert_eq!("qux", c.get_str(src));
 
             match_assert!([E::Id(a), E::Number(b) ,E::Call(c)] = &b.vals[..] => {
-                assert_eq!("bar", token_slice(src, &tokens, &a));
-                assert_eq!("1", token_slice(src, &tokens, &b));
+                assert_eq!("bar", a.get_str(src));
+                assert_eq!("1", b.get_str(src));
 
                 match_assert!([E::Id(a), E::Number(b), E::Bool(Bool::True(..)), E::String(c)] = &c.vals[..] => {
-                    assert_eq!("baz", token_slice(src, &tokens, &a));
-                    assert_eq!("2.0", token_slice(src, &tokens, &b));
-                    assert_eq!("\"hi\"", token_slice(src, &tokens, &c));
+                    assert_eq!("baz", a.get_str(src));
+                    assert_eq!("2.0", b.get_str(src));
+                    assert_eq!("\"hi\"", c.get_str(src));
                 });
             });
         });

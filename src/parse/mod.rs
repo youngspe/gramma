@@ -10,7 +10,7 @@ pub mod parsers;
 use smallvec::SmallVec;
 use std::fmt::{self, Debug, Display};
 
-use crate::lex::{Token, TokenValue};
+use crate::lex::BasicToken;
 
 // traits
 pub use ast::Ast;
@@ -75,7 +75,7 @@ impl ParseError {
     }
 
     /// Convert to an human-readable error format.
-    pub fn formatted(self, tokens: &[Token<impl TokenValue>], src: &str) -> FormattedParseError {
+    pub fn formatted<T: BasicToken>(self, tokens: &[T], src: &str) -> FormattedParseError {
         let mut expected = self
             .expected
             .iter()
@@ -128,6 +128,6 @@ impl Display for FormattedParseError {
 impl std::error::Error for FormattedParseError {}
 
 /// Constructs an abstract syntax tree of type `A` from the given tokens.
-pub fn build_ast<T: TokenValue, A: Parseable<T>>(tokens: &[Token<T>]) -> PResult<A> {
+pub fn build_ast<T, A: Parseable<T>>(tokens: &[T]) -> PResult<A> {
     Parseable::parse(&tokens)
 }

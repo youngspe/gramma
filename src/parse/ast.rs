@@ -1,11 +1,11 @@
-/// Types that represent or can be used to parse abstract syntax trees.
+//! Types that represent or can be used to parse abstract syntax trees.
 use std::convert::TryInto;
 use std::marker::PhantomData;
 
 use super::BeginParse;
 use super::{ParseError, ParseResult as PResult};
 use crate::lex::TokenIndex;
-use crate::lex::{Token, TokenValue};
+use crate::lex::{BasicToken, Token};
 
 /// Represents an abstract syntax tree -- what we will eventually parse from a defined grammar.
 pub trait Ast: std::fmt::Debug {
@@ -41,10 +41,10 @@ pub type Seq2Def<A, B> = Seq2<WrapAst<A>, WrapAst<B>>;
 /// A "terminal" in the grammar.
 /// Matches the token in the type argument.
 /// All rules will eventually end in either tokens or the empty rule.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct TokenAst<T: TokenValue> {
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TokenAst<T> {
     pub index: TokenIndex<T>,
-    _t: PhantomData<T>,
+    pub token: T,
 }
 
 /// Used to parse one of two ASTs that can both be converted to `Out`.
@@ -55,42 +55,45 @@ pub struct Union2<A: ?Sized, B: ?Sized, Out>(PhantomData<A>, PhantomData<B>, Pha
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct WrapAst<A: ?Sized>(PhantomData<A>);
 
-impl<T: TokenValue> TokenAst<T> {
-    pub fn new(index: usize) -> Self {
-        Self {
-            index: TokenIndex::new(index),
-            _t: PhantomData,
-        }
+impl<T: BasicToken> TokenAst<T> {
+    pub fn new(index: usize, token: T) -> Self {
+        let index = TokenIndex::new(index);
+        Self { index, token }
     }
 
-    pub fn get_str<'a, 'b, U: TokenValue>(&self, src: &'a str, tokens: &'b [Token<U>]) -> &'a str
-    where
-        &'b U: TryInto<&'b T>,
-    {
-        &src[self.index.lookup(tokens).range]
+    pub fn get_str<'a>(&self, src: &'a str) -> &'a str {
+        &src[self.token.range()]
+    }
+
+    pub fn inner_str<'a>(&self, src: &'a str) -> &'a str {
+        &src[self.token.inner_range()]
     }
 }
 
-impl<T: TokenValue> Ast for TokenAst<T> {
+impl<T: std::fmt::Debug> Ast for TokenAst<T> {
     fn range(&self) -> Option<(usize, usize)> {
         Some((self.index.0, self.index.0 + 1))
     }
 }
 
-impl<'a, T: TokenValue, U: TokenValue> BeginParse<'a, T> for TokenAst<U>
+impl<'a, T: BasicToken, U: Token + 'a> BeginParse<'a, T> for TokenAst<U>
 where
-    // for<'b> &'b U: TryFrom<&'b T>,
-    &'a T: TryInto<&'a U>,
+    T: Clone + TryInto<U>,
 {
-    type Parser = super::TokenParser;
+    type Parser = super::TokenParser<U>;
     type Output = Self;
 
-    fn begin_parse(tokens: &'a [Token<T>], mut index: usize) -> PResult<(Self::Parser, usize)> {
+    fn begin_parse(tokens: &'a [T], mut index: usize) -> PResult<(Self::Parser, usize)> {
         for token in &tokens[index..] {
-            if <&T as TryInto<&U>>::try_into(&token.value).is_ok() {
-                // if <&U>::try_from(&token.value).is_ok() {
-                return Ok((super::TokenParser { index }, index + 1));
-            } else if !token.value.should_ignore() {
+            if let Ok(this_token) = token.clone().try_into() {
+                return Ok((
+                    super::TokenParser {
+                        index,
+                        token: this_token,
+                    },
+                    index + 1,
+                ));
+            } else if !token.should_ignore() {
                 break;
             }
             index += 1
@@ -108,24 +111,23 @@ impl<T: Ast + ?Sized> Ast for Box<T> {
     }
 }
 
-impl<'a, T: TokenValue, O: BeginParse<'a, T> + ?Sized> BeginParse<'a, T> for Box<O> {
+impl<'a, T, O: BeginParse<'a, T> + ?Sized> BeginParse<'a, T> for Box<O> {
     type Parser = super::BoxParser<O::Parser>;
     type Output = Box<O::Output>;
 
-    fn begin_parse(tokens: &'a [Token<T>], index: usize) -> PResult<(Self::Parser, usize)> {
+    fn begin_parse(tokens: &'a [T], index: usize) -> PResult<(Self::Parser, usize)> {
         Self::Parser::new(O::begin_parse(tokens, index))
     }
 }
 
-impl<'a, T: TokenValue, A: BeginParse<'a, T> + ?Sized + 'a, B: Ast> BeginParse<'a, T>
-    for Convert<A, B>
+impl<'a, T, A: BeginParse<'a, T> + ?Sized + 'a, B: Ast> BeginParse<'a, T> for Convert<A, B>
 where
     A::Output: Into<B>,
 {
     type Parser = super::ConvertParser<'a, T, A>;
     type Output = B;
 
-    fn begin_parse(tokens: &'a [Token<T>], index: usize) -> PResult<(Self::Parser, usize)> {
+    fn begin_parse(tokens: &'a [T], index: usize) -> PResult<(Self::Parser, usize)> {
         Self::Parser::new(tokens, index)
     }
 }
@@ -136,11 +138,11 @@ impl Ast for Empty {
     }
 }
 
-impl<'a, T: TokenValue> BeginParse<'a, T> for Empty {
+impl<'a, T> BeginParse<'a, T> for Empty {
     type Parser = super::EmptyParser;
     type Output = Self;
 
-    fn begin_parse(_tokens: &'a [Token<T>], index: usize) -> PResult<(Self::Parser, usize)> {
+    fn begin_parse(_tokens: &'a [T], index: usize) -> PResult<(Self::Parser, usize)> {
         Ok((super::EmptyParser, index))
     }
 }
@@ -154,13 +156,13 @@ impl<A: Ast, B: Ast> Ast for Enum2<A, B> {
     }
 }
 
-impl<'a, T: TokenValue, A: BeginParse<'a, T> + 'a, B: BeginParse<'a, T> + 'a> BeginParse<'a, T>
+impl<'a, T: 'a, A: BeginParse<'a, T> + 'a, B: BeginParse<'a, T> + 'a> BeginParse<'a, T>
     for Enum2<A, B>
 {
     type Parser = super::Enum2Parser<'a, T, A, B>;
     type Output = Enum2<A::Output, B::Output>;
 
-    fn begin_parse(tokens: &'a [Token<T>], index: usize) -> PResult<(Self::Parser, usize)> {
+    fn begin_parse(tokens: &'a [T], index: usize) -> PResult<(Self::Parser, usize)> {
         Self::Parser::new(tokens, index)
     }
 }
@@ -171,11 +173,11 @@ impl<T: Ast> Ast for Option<T> {
     }
 }
 
-impl<'a, T: TokenValue, O: BeginParse<'a, T> + 'a> BeginParse<'a, T> for Option<O> {
+impl<'a, T: 'a, O: BeginParse<'a, T> + 'a> BeginParse<'a, T> for Option<O> {
     type Parser = super::OptionParser<'a, T, O>;
     type Output = Option<O::Output>;
 
-    fn begin_parse(tokens: &'a [Token<T>], index: usize) -> PResult<(Self::Parser, usize)> {
+    fn begin_parse(tokens: &'a [T], index: usize) -> PResult<(Self::Parser, usize)> {
         Self::Parser::new(tokens, index)
     }
 }
@@ -186,19 +188,19 @@ impl<A: Ast, B: Ast> Ast for Seq2<A, B> {
     }
 }
 
-impl<'a, T: TokenValue, A: BeginParse<'a, T> + 'a, B: BeginParse<'a, T> + 'a> BeginParse<'a, T>
+impl<'a, T: 'a, A: BeginParse<'a, T> + 'a, B: BeginParse<'a, T> + 'a> BeginParse<'a, T>
     for Seq2<A, B>
 {
     type Parser = super::Seq2Parser<'a, T, A, B>;
     type Output = Seq2<A::Output, B::Output>;
 
-    fn begin_parse(tokens: &'a [Token<T>], index: usize) -> PResult<(Self::Parser, usize)> {
+    fn begin_parse(tokens: &'a [T], index: usize) -> PResult<(Self::Parser, usize)> {
         Self::Parser::new(tokens, index)
     }
 }
 
-impl<'a, T: TokenValue, A: BeginParse<'a, T> + 'a, B: BeginParse<'a, T> + 'a, Out: Ast>
-    BeginParse<'a, T> for Union2<A, B, Out>
+impl<'a, T: 'a, A: BeginParse<'a, T> + 'a, B: BeginParse<'a, T> + 'a, Out: Ast> BeginParse<'a, T>
+    for Union2<A, B, Out>
 where
     A::Output: Into<Out>,
     B::Output: Into<Out>,
@@ -206,7 +208,7 @@ where
     type Parser = super::Union2Parser<'a, T, A, B>;
     type Output = Out;
 
-    fn begin_parse(tokens: &'a [Token<T>], index: usize) -> PResult<(Self::Parser, usize)> {
+    fn begin_parse(tokens: &'a [T], index: usize) -> PResult<(Self::Parser, usize)> {
         Self::Parser::new(tokens, index)
     }
 }
@@ -239,7 +241,7 @@ impl<T: Ast> Ast for Vec<T> {
 
 impl<
         'a,
-        T: TokenValue,
+        T: 'a,
         Item: BeginParse<'a, T> + ?Sized + 'a,
         Sep: BeginParse<'a, T> + ?Sized + 'a,
         Trail: BeginParse<'a, T> + ?Sized + 'a,
@@ -248,23 +250,23 @@ impl<
     type Parser = super::NonEmptyListParser<'a, T, Item, Sep, Trail>;
     type Output = Vec<Item::Output>;
 
-    fn begin_parse(tokens: &'a [Token<T>], index: usize) -> PResult<(Self::Parser, usize)> {
+    fn begin_parse(tokens: &'a [T], index: usize) -> PResult<(Self::Parser, usize)> {
         Self::Parser::new(tokens, index)
     }
 }
 
-impl<'a, T: TokenValue, Item: BeginParse<'a, T> + ?Sized> BeginParse<'a, T> for EmptyList<Item> {
+impl<'a, T, Item: BeginParse<'a, T> + ?Sized> BeginParse<'a, T> for EmptyList<Item> {
     type Parser = super::EmptyListParser;
     type Output = Vec<Item::Output>;
 
-    fn begin_parse(_tokens: &'a [Token<T>], index: usize) -> PResult<(Self::Parser, usize)> {
+    fn begin_parse(_tokens: &'a [T], index: usize) -> PResult<(Self::Parser, usize)> {
         Ok((super::EmptyListParser, index))
     }
 }
 
 impl<
         'a,
-        T: TokenValue,
+        T: 'a,
         Item: BeginParse<'a, T> + ?Sized + 'a,
         Sep: BeginParse<'a, T> + ?Sized + 'a,
         Trail: BeginParse<'a, T> + Sized + 'a,
@@ -277,16 +279,16 @@ impl<
         >>::Parser;
     type Output = Vec<Item::Output>;
 
-    fn begin_parse(tokens: &'a [Token<T>], index: usize) -> PResult<(Self::Parser, usize)> {
+    fn begin_parse(tokens: &'a [T], index: usize) -> PResult<(Self::Parser, usize)> {
         Self::Parser::new(tokens, index)
     }
 }
 
-impl<'a, T: TokenValue, A: BeginParse<'a, T> + ?Sized> BeginParse<'a, T> for WrapAst<A> {
+impl<'a, T, A: BeginParse<'a, T> + ?Sized> BeginParse<'a, T> for WrapAst<A> {
     type Parser = A::Parser;
     type Output = A::Output;
 
-    fn begin_parse(tokens: &'a [Token<T>], index: usize) -> PResult<(Self::Parser, usize)> {
+    fn begin_parse(tokens: &'a [T], index: usize) -> PResult<(Self::Parser, usize)> {
         A::begin_parse(tokens, index)
     }
 }
