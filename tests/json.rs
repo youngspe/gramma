@@ -1,10 +1,12 @@
+#[macro_use]
+pub mod common;
+
+use gramma::lex::{Eof, RealDecimal, StringToken, Token, TokenRef, Whitespace};
+use gramma::{grammar, tokens};
+use common::unwrap_display;
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::str::FromStr;
-
-use crate::lex::{Eof, RealDecimal, StringToken, Token, TokenRef, Whitespace};
-use crate::test::unwrap_display;
-use crate::{grammar, tokens};
 
 tokens! {
     pub struct LBrace => symbol("{");
@@ -90,7 +92,7 @@ fn parse(src: &str) -> JsonValue {
         }
     }
 
-    let (tokens, ast) = unwrap_display(crate::parse(src));
+    let (tokens, ast) = unwrap_display(gramma::parse(src));
     inner(src, &tokens, &ast)
 }
 

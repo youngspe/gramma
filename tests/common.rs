@@ -1,11 +1,8 @@
-mod json;
-mod lispish;
-
-use crate::lex::Token;
-use crate::parse::TokenAst;
+use gramma::lex::Token;
+use gramma::parse::TokenAst;
 use std::convert::TryInto;
 
-#[macro_export]
+#[allow(unused_macros)]
 macro_rules! match_assert {
     ($($pat:pat = $val:expr $(,$cond:expr)*$(,)? => $then:expr);*$(;)?) => {
         $(if let $pat = $val {
@@ -17,14 +14,14 @@ macro_rules! match_assert {
     };
 }
 
-fn unwrap_display<T, E: std::fmt::Display>(r: Result<T, E>) -> T {
+pub fn unwrap_display<T, E: std::fmt::Display>(r: Result<T, E>) -> T {
     match r {
         Ok(v) => v,
         Err(e) => panic!("{}", e),
     }
 }
 
-fn token_slice<'a, T: crate::lex::TokenValue, U: crate::lex::TokenValue>(
+pub fn token_slice<'a, T: gramma::lex::TokenValue, U: gramma::lex::TokenValue>(
     src: &'a str,
     tokens: &[Token<T>],
     token: &TokenAst<U>,

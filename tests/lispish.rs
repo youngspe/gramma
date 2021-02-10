@@ -1,9 +1,9 @@
-use crate::lex::{Eof, RealDecimal, StringToken, Whitespace};
-use crate::match_assert;
-use crate::test::token_slice;
-use crate::test::unwrap_display;
-use crate::test::Token;
-use crate::{grammar, tokens};
+#[macro_use]
+pub mod common;
+
+use common::{token_slice, unwrap_display};
+use gramma::lex::{Eof, RealDecimal, StringToken, Token, Whitespace};
+use gramma::{grammar, tokens};
 
 tokens! {
     pub struct LParen => symbol("(");
@@ -55,7 +55,7 @@ grammar! { LispishToken;
 }
 
 fn parse(src: &str) -> (Vec<Token<LispishToken>>, Lispish) {
-    unwrap_display(crate::parse(src))
+    unwrap_display(gramma::parse(src))
 }
 
 #[test]

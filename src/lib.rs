@@ -8,8 +8,6 @@ extern crate thiserror;
 
 pub mod lex;
 pub mod parse;
-#[cfg(test)]
-mod test;
 mod utils;
 
 use crate::parse::FormattedParseError;
