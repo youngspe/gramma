@@ -4,7 +4,7 @@ use rs_typed_parser::ast::{DelimitedList, Discard, Ignore, InfixChain, Token, Wi
 pub fn parse_test() {
     type Blank = Ignore<Token<Space>>;
 
-    rs_typed_parser::define_node!(
+    rs_typed_parser::define_rule!(
         pub struct Braces {
             l_brace: Discard<Token<LBrace>>,
             inner: DelimitedList<Expr, (Blank, Token<Comma>)>,

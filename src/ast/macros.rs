@@ -37,7 +37,7 @@ macro_rules! _enum_from_inner {
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! _define_node {
+macro_rules! _define_rule {
     (
         $(#$attr:tt)*
         $vis:vis struct $Name:ident {
@@ -148,12 +148,12 @@ macro_rules! _define_node {
 }
 
 #[macro_export]
-macro_rules! define_node {
+macro_rules! define_rule {
     ($(
         $(#$attr:tt)*
         $vis:vis $kind:ident $Name:ident {$($x:tt)*}
     )*) => {$(
-        $crate::_define_node! {
+        $crate::_define_rule! {
             $(#$attr)*
             $vis $kind $Name {$($x)*}
         }
