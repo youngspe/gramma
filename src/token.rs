@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    parse::{Location, LocationRange, ParseContext, TokenBuf},
+    parse::{CxType, Location, LocationRange},
     utils::simple_name,
 };
 
@@ -97,10 +97,10 @@ impl TokenType {
         (self.token_id)()
     }
 
-    pub fn try_lex<A: TokenBuf + ?Sized>(&'static self, cx: ParseContext<A>) -> Option<AnyToken> {
+    pub fn try_lex<Cx: CxType>(&'static self, src: &str, location: Location) -> Option<AnyToken> {
         Some(AnyToken {
             token_type: self,
-            range: (self.try_lex)(cx.src, *cx.location)?,
+            range: (self.try_lex)(src, location)?,
         })
     }
 }

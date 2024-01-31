@@ -11,10 +11,6 @@ pub fn parse_test() {
             _space1: Blank,
             r_brace: Discard<Token<RBrace>>,
         }
-        pub struct BracesList {
-            first: Braces,
-            rest: Option<Box<Braces>>,
-        }
         pub struct Expr {
             value: InfixChain<BaseExpr, (Blank, InfixOp)>,
         }
