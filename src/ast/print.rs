@@ -143,3 +143,13 @@ pub enum PrintVisibility {
     #[default]
     Always,
 }
+
+impl PrintVisibility {
+    pub fn should_print(self, cx: &PrintContext) -> bool {
+        match self {
+            PrintVisibility::Never => false,
+            PrintVisibility::DebugOnly => cx.is_debug(),
+            PrintVisibility::Always => true,
+        }
+    }
+}

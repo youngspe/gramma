@@ -2,6 +2,7 @@ use std::{
     any::{Any, TypeId},
     cmp::Ordering,
     fmt::{self, Debug, Formatter},
+    ptr,
 };
 
 use crate::{
@@ -12,7 +13,13 @@ use crate::{
 pub trait TokenDef: Any {
     fn try_lex(src: &str, location: Location) -> Option<LocationRange>;
 
-    fn from_range(src: &str, range: LocationRange) -> Self;
+    fn from_range(src: &str, range: LocationRange) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let _ = (src, range);
+        None
+    }
 
     fn name() -> &'static str {
         simple_name::<Self>()
@@ -56,7 +63,7 @@ impl Debug for TokenType {
 
 impl PartialEq for TokenType {
     fn eq(&self, other: &Self) -> bool {
-        self.token_id() == other.token_id()
+        ptr::eq(self, other) || self.token_id() == other.token_id()
     }
 }
 
@@ -116,8 +123,8 @@ impl TokenDef for Eof {
         })
     }
 
-    fn from_range(_: &str, _: LocationRange) -> Self {
-        Self
+    fn from_range(_: &str, _: LocationRange) -> Option<Self> {
+        Some(Self)
     }
 
     fn name() -> &'static str {
@@ -182,10 +189,10 @@ macro_rules! _define_token {
                 ::core::stringify!($Name)
             }
 
-            fn from_range(_src: &str, _range: $crate::parse::LocationRange) -> Self {
-                Self $( (::core::convert::TryInto::<$Ty>::try_into(
+            fn from_range(_src: &str, _range: $crate::parse::LocationRange) -> ::core::option::Option<Self> {
+                ::core::option::Option::Some(Self $( (::core::convert::TryInto::<$Ty>::try_into(
                     &_src[_range.start.position.._range.end.position]
-                ).ok().unwrap()) )?
+                ).ok()?) )?)
             }
         }
     )*};

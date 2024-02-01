@@ -16,8 +16,6 @@ use crate::{
     Rule,
 };
 
-use self::private::ContextType;
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Location {
     pub position: usize,
@@ -117,10 +115,9 @@ pub fn lex_exact(pattern: &str, src: &str, location: Location) -> Option<Locatio
 mod private {
     use super::*;
 
-    pub trait ContextType {
+    pub trait ContextType: Debug {
         type LookAhead: TokenBufData;
         fn child(&self) -> Self;
-        fn init_lookahead(&self) -> Self::LookAhead;
     }
 }
 
@@ -129,10 +126,6 @@ pub(crate) struct CxTypeImpl<const LA: usize> {}
 
 impl<const LA: usize> private::ContextType for CxTypeImpl<LA> {
     type LookAhead = [Option<AnyToken>; LA];
-
-    fn init_lookahead(&self) -> Self::LookAhead {
-        [None; LA]
-    }
 
     fn child(&self) -> Self {
         Self {}
@@ -154,6 +147,28 @@ pub struct ParseContext<'src, 'cx, Cx: CxType> {
     _cx_type: PhantomData<&'cx Cx>,
 }
 
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct ParseContextUpdate<'src, 'cx, Cx: CxType> {
+    pub src: Option<&'src str>,
+    pub location: Option<&'cx mut Location>,
+    pub error: Option<&'cx mut ParseError<'static>>,
+    pub look_ahead: Option<&'cx mut TokenBuf<Cx::LookAhead>>,
+    pub discard: Option<bool>,
+}
+
+impl<Cx: CxType> Default for ParseContextUpdate<'_, '_, Cx> {
+    fn default() -> Self {
+        Self {
+            src: None,
+            location: None,
+            error: None,
+            look_ahead: None,
+            discard: None,
+        }
+    }
+}
+
 pub(crate) type SizedParseContext<'src, 'cx, const LA: usize> =
     ParseContext<'src, 'cx, CxTypeImpl<LA>>;
 
@@ -169,10 +184,8 @@ impl<'src, const LA: usize> SizedParseContext<'src, 'static, LA> {
             src,
             error: &mut error,
             location: &mut Location { position: 0 },
-            discard: true,
-            look_ahead: &mut TokenBuf {
-                data: cx_type.init_lookahead(),
-            },
+            discard: false,
+            look_ahead: &mut default(),
             cx_type,
             _cx_type: PhantomData,
         });
@@ -207,9 +220,37 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
         self.discard
     }
 
-    pub fn discarding(mut self) -> Self {
-        self.discard = true;
-        self
+    pub fn update<'src2, 'cx2>(
+        self,
+        update: ParseContextUpdate<'src2, 'cx2, Cx>,
+    ) -> ParseContext<'src2, 'cx2, Cx>
+    where
+        'src: 'src2,
+        'cx: 'cx2,
+    {
+        let ParseContextUpdate {
+            src,
+            location,
+            error,
+            look_ahead,
+            discard,
+        } = update;
+
+        ParseContext {
+            src: src.unwrap_or(self.src),
+            error: error.unwrap_or(self.error),
+            location: location.unwrap_or(self.location),
+            look_ahead: look_ahead.unwrap_or(self.look_ahead),
+            discard: discard.unwrap_or(self.discard),
+            ..self
+        }
+    }
+
+    pub fn discarding(self) -> Self {
+        self.update(ParseContextUpdate {
+            discard: Some(true),
+            ..default()
+        })
     }
 
     pub fn src(&self) -> &'src str {
@@ -237,11 +278,11 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
         }
     }
 
-    pub fn look_ahead(&self) -> &TokenBuf<impl TokenBufData> {
+    pub fn look_ahead(&self) -> &TokenBuf<Cx::LookAhead> {
         &self.look_ahead
     }
 
-    pub fn look_ahead_mut(&mut self) -> &mut TokenBuf<impl TokenBufData> {
+    pub fn look_ahead_mut(&mut self) -> &mut TokenBuf<Cx::LookAhead> {
         &mut self.look_ahead
     }
 
@@ -282,9 +323,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
         let mut look_ahead = if start == *self.location {
             self.look_ahead.clone()
         } else {
-            TokenBuf {
-                data: cx_type.init_lookahead(),
-            }
+            default()
         };
 
         let out = T::parse(
@@ -318,15 +357,16 @@ pub struct ParseContextParts<'src, 'cx> {
 pub trait TokenBufData:
     Debug + Copy + AsRef<[Option<AnyToken>]> + AsMut<[Option<AnyToken>]> + Ord + Hash + 'static
 {
+    fn init_data() -> Self;
 }
 
-impl<
-        This: Debug + Copy + AsRef<[Option<AnyToken>]> + AsMut<[Option<AnyToken>]> + Ord + Hash + 'static,
-    > TokenBufData for This
-{
+impl<const LEN: usize> TokenBufData for [Option<AnyToken>; LEN] {
+    fn init_data() -> Self {
+        [None; LEN]
+    }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TokenBuf<A: TokenBufData> {
     data: A,
 }
@@ -336,6 +376,13 @@ impl<A: TokenBufData> TokenBuf<A> {
         let token = self.first_mut()?.take();
         self.rotate_left(1);
         token
+    }
+}
+impl<A: TokenBufData> Default for TokenBuf<A> {
+    fn default() -> Self {
+        Self {
+            data: A::init_data(),
+        }
     }
 }
 
