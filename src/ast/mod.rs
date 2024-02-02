@@ -18,7 +18,7 @@ use crate::{
         ParseError, SizedParseContext,
     },
     token::{AnyToken, Eof, TokenDef, TokenType},
-    utils::{default, simple_name, DebugFn},
+    utils::{default, simple_name, try_run, DebugFn, MyTry},
 };
 
 use self::print::{PrintContext, PrintVisibility};
@@ -39,6 +39,14 @@ impl<T: Rule + ?Sized> fmt::Display for WithSource<'_, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.ast.print_tree(&PrintContext::new(self.src), f)
     }
+}
+
+#[non_exhaustive]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PreParseState {
+    pub start: Location,
+    pub end: Location,
+    pub dist: usize,
 }
 
 pub trait Rule: Any + Debug {
@@ -68,19 +76,10 @@ pub trait Rule: Any + Debug {
 
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
+        state: PreParseState,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<()>
     where
-        Self: Sized;
-
-    fn record_error<Cx: CxType>(
-        cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
-        next: &RuleType<Cx>,
-    ) where
         Self: Sized;
 
     fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
@@ -100,8 +99,7 @@ pub struct RuleType<'lt, Cx: CxType> {
     name: fn() -> &'static str,
     print_name: fn(&mut Formatter) -> fmt::Result,
     node_id: fn() -> TypeId,
-    pre_parse: fn(ParseContext<Cx>, Location, usize, &RuleType<Cx>) -> RuleParseResult<()>,
-    record_error: fn(ParseContext<Cx>, Location, usize, &RuleType<Cx>),
+    pre_parse: fn(ParseContext<Cx>, PreParseState, &RuleType<Cx>) -> RuleParseResult<()>,
     next: Option<&'lt Self>,
 }
 
@@ -112,7 +110,6 @@ impl<'lt, Cx: CxType> RuleType<'lt, Cx> {
             print_name: T::print_name,
             node_id: TypeId::of::<T>,
             pre_parse: T::pre_parse::<Cx>,
-            record_error: T::record_error,
             next: next.into(),
         }
     }
@@ -123,7 +120,6 @@ impl<'lt, Cx: CxType> RuleType<'lt, Cx> {
             print_name: T::print_name,
             node_id: TypeId::of::<T>,
             pre_parse: T::pre_parse,
-            record_error: T::record_error,
             next: None,
         }
     }
@@ -143,24 +139,11 @@ impl<'lt, Cx: CxType> RuleType<'lt, Cx> {
     }
 
     #[inline]
-    pub fn pre_parse(
-        &self,
-        cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
-    ) -> RuleParseResult<()> {
-        if dist >= cx.look_ahead().len() {
+    pub fn pre_parse(&self, cx: ParseContext<Cx>, state: PreParseState) -> RuleParseResult<()> {
+        if state.dist >= cx.look_ahead().len() {
             return Ok(());
         }
-        (self.pre_parse)(cx, start, dist, self.next.unwrap_or_default())
-    }
-
-    #[inline]
-    pub fn record_error(&self, mut cx: ParseContext<Cx>, start: Location, dist: usize) {
-        if dist >= cx.look_ahead().len() || cx.error_mut().location == Location::MAX {
-            return;
-        }
-        (self.record_error)(cx, start, dist, self.next.unwrap_or_default())
+        (self.pre_parse)(cx, state, self.next.unwrap_or_default())
     }
 }
 
@@ -197,21 +180,22 @@ pub enum Reject {}
 impl Rule for Reject {
     fn pre_parse<Cx: CxType>(
         _: ParseContext<Cx>,
-        _: Location,
-        _: usize,
+        state: PreParseState,
         _: &RuleType<Cx>,
     ) -> RuleParseResult<()> {
-        Err(default())
+        Err(RuleParseFailed {
+            location: state.start,
+        })
     }
 
-    fn parse<Cx: CxType>(_: ParseContext<Cx>, _: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(cx: ParseContext<Cx>, _: &RuleType<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
-        Err(default())
+        Err(RuleParseFailed {
+            location: cx.location(),
+        })
     }
-
-    fn record_error<Cx: CxType>(_: ParseContext<Cx>, _: Location, _: usize, _: &RuleType<Cx>) {}
 
     fn matches_empty() -> bool {
         false
@@ -269,11 +253,10 @@ where
 
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
+        state: PreParseState,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<()> {
-        Self::update_context(cx, |cx| This::Inner::pre_parse(cx, start, dist, next))
+        Self::update_context(cx, |cx| This::Inner::pre_parse(cx, state, next))
     }
 
     fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
@@ -288,15 +271,6 @@ where
         Self: Sized,
     {
         This::Inner::matches_empty()
-    }
-
-    fn record_error<Cx: CxType>(
-        cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
-        next: &RuleType<Cx>,
-    ) {
-        Self::update_context(cx, |cx| This::Inner::record_error(cx, start, dist, next))
     }
 }
 
@@ -313,11 +287,10 @@ impl<T: Rule> Rule for Vec<T> {
 
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
+        state: PreParseState,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<()> {
-        ListNodePlaceholder::<T>::pre_parse(cx, start, dist, next)
+        ListNodePlaceholder::<T>::pre_parse(cx, state, next)
     }
 
     fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
@@ -336,15 +309,6 @@ impl<T: Rule> Rule for Vec<T> {
 
         Ok(out)
     }
-
-    fn record_error<Cx: CxType>(
-        cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
-        next: &RuleType<Cx>,
-    ) {
-        ListNodePlaceholder::<T>::record_error(cx, start, dist, next)
-    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -353,11 +317,10 @@ pub struct Empty;
 impl Rule for Empty {
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
+        state: PreParseState,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<()> {
-        next.pre_parse(cx, start, dist)
+        next.pre_parse(cx, state)
     }
 
     fn parse<Cx: CxType>(_: ParseContext<Cx>, _: &RuleType<Cx>) -> RuleParseResult<Self>
@@ -365,15 +328,6 @@ impl Rule for Empty {
         Self: Sized,
     {
         Ok(Self)
-    }
-
-    fn record_error<Cx: CxType>(
-        cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
-        next: &RuleType<Cx>,
-    ) {
-        next.record_error(cx, start, dist)
     }
 
     fn matches_empty() -> bool {
@@ -423,8 +377,18 @@ impl<T: Rule> TransformRule for Box<T> {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct RuleParseFailed {}
+#[derive(Debug)]
+pub struct RuleParseFailed {
+    pub location: Location,
+}
+
+impl RuleParseFailed {
+    pub fn combine(self, rhs: Self) -> Self {
+        RuleParseFailed {
+            location: self.location.max(rhs.location),
+        }
+    }
+}
 
 pub type RuleParseResult<T> = Result<T, RuleParseFailed>;
 
@@ -453,40 +417,33 @@ impl<T: Rule, U: Rule> Rule for Either<T, U> {
 
     fn pre_parse<Cx: CxType>(
         mut cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
+        state: PreParseState,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<()> {
-        T::pre_parse(cx.by_ref(), start, dist, next)
-            .or_else(|_| U::pre_parse(cx, start, dist, next))
+        T::pre_parse(cx.by_ref(), state, next).or_else(|_| U::pre_parse(cx, state, next))
     }
 
     fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
-        let start = cx.location();
-        if T::pre_parse(cx.by_ref(), start, 0, next).is_ok() {
+        let Err(err1) = cx.pre_parse::<T>(next) else {
             return T::parse(cx, next).map(Either::Left);
-        }
-        if U::pre_parse(cx.by_ref(), start, 0, next).is_ok() {
+        };
+        let Err(err2) = cx.pre_parse::<U>(next) else {
             return U::parse(cx, next).map(Either::Right);
-        }
-        Self::record_error(cx, start, 0, next);
-        Err(default())
-    }
+        };
+        let max_location = err1.location.max(err2.location);
 
-    fn record_error<Cx: CxType>(
-        mut cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
-        next: &RuleType<Cx>,
-    ) {
-        if cx.error_mut().location == Location::MAX {
-            return;
+        if err1.location == max_location {
+            let _ = cx.record_error::<T>(next);
         }
-        T::record_error(cx.by_ref(), start, dist, next);
-        U::record_error(cx, start, dist, next);
+
+        if err2.location == max_location {
+            let _ = cx.record_error::<U>(next);
+        }
+
+        Err(err1.combine(err2))
     }
 }
 
@@ -507,11 +464,10 @@ impl<T: Rule, U: Rule> Rule for (T, U) {
 
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
+        state: PreParseState,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<()> {
-        T::pre_parse(cx, start, dist, &RuleType::new::<U>(next))
+        T::pre_parse(cx, state, &RuleType::new::<U>(next))
     }
 
     fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
@@ -529,15 +485,6 @@ impl<T: Rule, U: Rule> Rule for (T, U) {
         Self: Sized,
     {
         T::matches_empty() && U::matches_empty()
-    }
-
-    fn record_error<Cx: CxType>(
-        cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
-        next: &RuleType<Cx>,
-    ) {
-        T::record_error(cx, start, dist, next)
     }
 }
 
@@ -683,35 +630,46 @@ impl<T: TokenDef> Rule for Token<T> {
 
     fn pre_parse<Cx: CxType>(
         mut cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
+        state: PreParseState,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<()> {
+        if state.start > state.end {
+            return Ok(());
+        }
+
         let ParseContextParts {
             src, look_ahead, ..
         } = cx.as_parts();
 
-        let (end, rest) = match &mut look_ahead[dist..] {
+        let end = match &mut look_ahead[state.dist..] {
             [] => return Ok(()),
-            [Some(token), rest @ ..] if token.token_type.token_id() == TypeId::of::<T>() => {
-                (token.range.end, rest)
+            [Some(token), ..] if token.token_type.token_id() == TypeId::of::<T>() => {
+                token.range.end
             }
-            [token, rest @ ..] => {
-                let Some(range) = T::try_lex(src, start) else {
-                    return Err(default());
+            [token, ..] => {
+                let Some(range) = T::try_lex(src, state.start) else {
+                    cx.error_mut()
+                        .add_expected(state.start, TokenType::of::<T>());
+                    return Err(RuleParseFailed {
+                        location: state.start,
+                    });
                 };
                 *token = Some(AnyToken {
                     token_type: TokenType::of::<T>(),
                     range,
                 });
-                (range.end, rest)
+                range.end
             }
         };
 
-        match rest {
-            [] => Ok(()),
-            [..] => next.pre_parse(cx, end, dist + 1),
-        }
+        next.pre_parse(
+            cx,
+            PreParseState {
+                start: end,
+                dist: state.dist + 1,
+                ..state
+            },
+        )
     }
 
     fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, _: &RuleType<Cx>) -> RuleParseResult<Self>
@@ -720,10 +678,10 @@ impl<T: TokenDef> Rule for Token<T> {
     {
         let location = cx.location();
 
-        let out = (|| {
+        try_run(|| {
             if let [Some(token), ..] = **cx.look_ahead() {
                 if token.token_type.token_id() != TypeId::of::<T>() {
-                    return Err(default());
+                    return Err(RuleParseFailed { location });
                 }
                 cx.advance();
                 return Ok(Self {
@@ -732,55 +690,15 @@ impl<T: TokenDef> Rule for Token<T> {
                 });
             }
 
-            let range = T::try_lex(cx.src(), location).ok_or(default())?;
+            let range = T::try_lex(cx.src(), location).ok_or(RuleParseFailed { location })?;
             cx.set_location(range.end);
 
             Ok(Self { range, value: None })
-        })();
-
-        if out.is_err() && cx.error_mut().location != Location::MAX {
-            cx.error_mut().add_expected(location, TokenType::of::<T>())
-        }
-
-        out
-    }
-
-    fn record_error<Cx: CxType>(
-        mut cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
-        next: &RuleType<Cx>,
-    ) {
-        if cx.error_mut().location == Location::MAX {
-            return;
-        }
-        let ParseContextParts {
-            src,
-            error,
-            look_ahead,
-            ..
-        } = cx.as_parts();
-        let end = match &mut look_ahead[dist..] {
-            [] => return,
-            [Some(token), ..]
-                if token.range.start >= start
-                    && token.token_type.token_id() == TypeId::of::<T>() =>
-            {
-                token.range.end
-            }
-            [token, ..] => match T::try_lex(src, start) {
-                Some(LocationRange { end, .. }) => end,
-                None => {
-                    error.add_expected(
-                        token.map(|t| t.range.start).unwrap_or(start),
-                        TokenType::of::<T>(),
-                    );
-                    return;
-                }
-            },
-        };
-
-        next.record_error(cx, end, dist + 1)
+        })
+        .break_also(|err| {
+            cx.error_mut()
+                .add_expected(err.location, TokenType::of::<T>())
+        })
     }
 }
 
@@ -853,17 +771,10 @@ impl Rule for Accept {
 
     fn pre_parse<Cx: CxType>(
         _: ParseContext<Cx>,
-        _: Location,
-        _: usize,
+        _: PreParseState,
         _: &RuleType<Cx>,
     ) -> RuleParseResult<()> {
         Ok(())
-    }
-
-    fn record_error<Cx: CxType>(_: ParseContext<Cx>, _: Location, _: usize, _: &RuleType<Cx>)
-    where
-        Self: Sized,
-    {
     }
 
     fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, _: &RuleType<Cx>) -> RuleParseResult<Self>
@@ -920,27 +831,23 @@ impl<Outer: Rule, Inner: Rule> Rule for DualParse<Outer, Inner> {
     }
 
     fn pre_parse<Cx: CxType>(
-        cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
+        mut cx: ParseContext<Cx>,
+        state: PreParseState,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
     {
-        Outer::pre_parse(cx, start, dist, next)
-    }
-
-    fn record_error<Cx: CxType>(
-        mut cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
-        next: &RuleType<Cx>,
-    ) where
-        Self: Sized,
-    {
-        Outer::record_error(cx.by_ref(), start, dist, next);
-        Inner::record_error(cx, start, dist, next);
+        let mut look_ahead = *cx.look_ahead();
+        Outer::pre_parse(cx.by_ref(), state, next)?;
+        Inner::pre_parse(
+            cx.by_ref().update(ParseContextUpdate {
+                look_ahead: Some(&mut look_ahead),
+                ..default()
+            }),
+            state,
+            default(),
+        )
     }
 
     fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
@@ -959,7 +866,7 @@ impl<Outer: Rule, Inner: Rule> Rule for DualParse<Outer, Inner> {
             look_ahead: Some(&mut default()),
             ..default()
         }) {
-            cx => <(Inner, Silent<Token<Eof>>)>::parse(cx, next)?,
+            cx => <(Inner, Silent<Token<Eof>>)>::parse(cx, default())?,
         };
 
         if end > start {
@@ -1000,53 +907,48 @@ impl<T: Rule> Rule for CompoundToken<T> {
 
     fn pre_parse<Cx: CxType>(
         mut cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
+        state: PreParseState,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
     {
-        let end = match cx.look_ahead().get(dist).copied() {
+        let end = match cx.look_ahead().get(state.dist).copied() {
             Some(Some(token)) if token.token_type == TokenType::of::<CompoundTokenDef<T>>() => {
                 token.range.end
             }
             Some(_) => {
-                let (_, end) = cx.isolated_parse::<Discard<T>>(start, next)?;
-                cx.look_ahead_mut()[dist] = Some(AnyToken {
+                let (_, end) = cx.isolated_parse::<Discard<T>>(state.start, next)?;
+                cx.look_ahead_mut()[state.dist] = Some(AnyToken {
                     token_type: TokenType::of::<CompoundTokenDef<T>>(),
-                    range: LocationRange { start, end },
+                    range: LocationRange {
+                        start: state.start,
+                        end,
+                    },
                 });
                 end
             }
             None => return Ok(()),
         };
 
-        if dist + 1 < cx.look_ahead().len() {
-            next.pre_parse(cx, end, dist + 1)
-        } else {
-            Ok(())
-        }
-    }
-
-    fn record_error<Cx: CxType>(
-        cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
-        next: &RuleType<Cx>,
-    ) where
-        Self: Sized,
-    {
-        T::record_error(cx, start, dist, next)
+        next.pre_parse(
+            cx,
+            PreParseState {
+                start: end,
+                dist: state.dist + 1,
+                ..state
+            },
+        )
     }
 
     fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
+        let location = cx.location();
         Ok(match cx.look_ahead().first().copied().flatten() {
             Some(token) if token.token_type != TokenType::of::<CompoundTokenDef<T>>() => {
-                return Err(default());
+                return Err(RuleParseFailed { location });
             }
             Some(_) => {
                 let value = T::parse(
@@ -1074,27 +976,21 @@ pub struct Backtrack<T> {
 
 impl<T: Rule> Rule for Backtrack<T> {
     fn pre_parse<Cx: CxType>(
-        cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
+        mut cx: ParseContext<Cx>,
+        state: PreParseState,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
     {
-        let (_, end) = cx.isolated_parse::<(Discard<T>,)>(start, next)?;
-        next.pre_parse(cx, end, dist)
-    }
-
-    fn record_error<Cx: CxType>(
-        cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
-        next: &RuleType<Cx>,
-    ) where
-        Self: Sized,
-    {
-        todo!()
+        let (_, end) = cx.isolated_parse::<(Discard<T>,)>(state.start, next)?;
+        next.pre_parse(
+            cx,
+            PreParseState {
+                start: end,
+                ..state
+            },
+        )
     }
 
     fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
@@ -1160,25 +1056,13 @@ pub struct GetLocation {
 impl Rule for GetLocation {
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
+        state: PreParseState,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
     {
-        next.pre_parse(cx, start, dist)
-    }
-
-    fn record_error<Cx: CxType>(
-        cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
-        next: &RuleType<Cx>,
-    ) where
-        Self: Sized,
-    {
-        next.record_error(cx, start, dist)
+        next.pre_parse(cx, state)
     }
 
     fn parse<Cx: CxType>(cx: ParseContext<Cx>, _: &RuleType<Cx>) -> RuleParseResult<Self>
@@ -1226,7 +1110,7 @@ impl<T: Rule> TransformRule for Discard<T> {
 }
 
 impl<T: Rule> TransformRule for Ignore<T> {
-    type Inner = Discard<Backtrack<T>>;
+    type Inner = Backtrack<Discard<Option<T>>>;
     fn from_inner(_: Self::Inner) -> Self {
         default()
     }
@@ -1245,51 +1129,6 @@ impl<T: Rule> TransformRule for Ignore<T> {
     fn print_visibility(&self, _: &PrintContext) -> PrintVisibility {
         PrintVisibility::Never
     }
-
-    //     fn pre_parse<Cx: CxType>(
-    //         mut cx: ParseContext<Cx>,
-    //         start: Location,
-    //         dist: usize,
-    //         next: &RuleType<Cx>,
-    //     ) -> RuleParseResult<()>
-    //     where
-    //         Self: Sized,
-    //     {
-    //         let (_, new_start) = cx.isolated_parse::<Discard<Option<T>>>(start, next)?;
-    //         if new_start > start {
-    //             cx.look_ahead_mut()[dist..].fill(None);
-    //         }
-
-    //         next.pre_parse(cx, new_start, dist)
-    //     }
-
-    //     fn record_error<Cx: CxType>(
-    //         cx: ParseContext<Cx>,
-    //         start: Location,
-    //         dist: usize,
-    //         next: &RuleType<Cx>,
-    //     ) where
-    //         Self: Sized,
-    //     {
-    //         let next_start = match cx.look_ahead()[dist..] {
-    //             [Some(t), ..] => t.range.start,
-    //             _ => start,
-    //         };
-    //         next.record_error(cx, next_start, dist)
-    //     }
-
-    //     fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
-    //     where
-    //         Self: Sized,
-    //     {
-    //         let (_, location) = cx.isolated_parse::<Discard<Option<T>>>(None, next)?;
-    //         cx.set_location(location);
-    //         Ok(default())
-    //     }
-
-    //     fn matches_empty() -> bool {
-    //         true
-    //     }
 }
 
 #[derive(Debug)]
@@ -1338,25 +1177,13 @@ impl<T: Rule, After: Rule> Rule for Partial<T, After> {
 
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
+        state: PreParseState,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
     {
-        <(T, After)>::pre_parse(cx, start, dist, next)
-    }
-
-    fn record_error<Cx: CxType>(
-        cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
-        next: &RuleType<Cx>,
-    ) where
-        Self: Sized,
-    {
-        <(T, After)>::record_error(cx, start, dist, next)
+        <(T, After)>::pre_parse(cx, state, next)
     }
 
     fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
@@ -1445,32 +1272,16 @@ impl<T: Rule, Delim: Rule, const TRAIL: bool> Rule for DelimitedList<T, Delim, T
 
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
+        state: PreParseState,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
     {
         if TRAIL {
-            DelimitedListPrototype::<T, Delim, Option<Delim>>::pre_parse(cx, start, dist, next)
+            DelimitedListPrototype::<T, Delim, Option<Delim>>::pre_parse(cx, state, next)
         } else {
-            DelimitedListPrototype::<T, Delim, Empty>::pre_parse(cx, start, dist, next)
-        }
-    }
-
-    fn record_error<Cx: CxType>(
-        cx: ParseContext<Cx>,
-        start: Location,
-        dist: usize,
-        next: &RuleType<Cx>,
-    ) where
-        Self: Sized,
-    {
-        if TRAIL {
-            DelimitedListPrototype::<T, Delim, Option<Delim>>::record_error(cx, start, dist, next)
-        } else {
-            DelimitedListPrototype::<T, Delim, Empty>::record_error(cx, start, dist, next)
+            DelimitedListPrototype::<T, Delim, Empty>::pre_parse(cx, state, next)
         }
     }
 

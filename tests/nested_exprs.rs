@@ -101,7 +101,24 @@ pub fn parse_test2() {
 
 #[test]
 pub fn parse_test3() {
-    let src = r#"{/}"#;
-    let ast = rs_typed_parser::parse_tree::<(Blank, Braces, Blank), 1>(src).unwrap();
+    let src = r#"
+    {
+        a,
+        {
+            a,
+            {
+                {
+                    {
+                        a + foo_bar + {
+                            {{a,b}},
+                        }
+                    }-{}
+                }
+            },
+            b,
+        },
+        b
+    }"#;
+    let ast = rs_typed_parser::parse_tree::<Expr, 1>(src).unwrap();
     println!("{:#}", WithSource { src, ast });
 }

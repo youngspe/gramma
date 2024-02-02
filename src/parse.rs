@@ -10,7 +10,7 @@ use std::{
 use regex::Regex;
 
 use crate::{
-    ast::{RuleParseResult, RuleType},
+    ast::{PreParseState, RuleParseResult, RuleType},
     token::{AnyToken, TokenType},
     utils::default,
     Rule,
@@ -306,19 +306,62 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
         self.by_ref().into_parts()
     }
 
+    fn pre_parse_inner<'next, T: Rule>(self, next: Option<&RuleType<Cx>>) -> RuleParseResult<()>
+    where
+        Cx: 'next,
+    {
+        let start = self.location();
+        let end = Location {
+            position: self.src.len(),
+        };
+        T::pre_parse(
+            self.update(ParseContextUpdate {
+                discard: Some(true),
+                ..default()
+            }),
+            PreParseState {
+                start,
+                end,
+                dist: 0,
+            },
+            next.unwrap_or_default(),
+        )
+    }
+
+    pub fn pre_parse<'next, T: Rule>(
+        &mut self,
+        next: impl Into<Option<&'next RuleType<'next, Cx>>> + 'next,
+    ) -> RuleParseResult<()>
+    where
+        Cx: 'next,
+    {
+        self.by_ref()
+            .update(ParseContextUpdate {
+                error: Some(&mut ParseError {
+                    location: Location::MAX,
+                    ..default()
+                }),
+                ..default()
+            })
+            .pre_parse_inner::<T>(next.into())
+    }
+
+    pub fn record_error<'next, T: Rule>(
+        &mut self,
+        next: impl Into<Option<&'next RuleType<'next, Cx>>> + 'next,
+    ) -> RuleParseResult<()>
+    where
+        Cx: 'next,
+    {
+        self.by_ref().pre_parse_inner::<T>(next.into())
+    }
+
     pub(crate) fn isolated_parse<T: Rule>(
-        &self,
+        &mut self,
         start: impl Into<Option<Location>>,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<(T, Location)> {
-        let &Self {
-            src,
-            discard,
-            ref cx_type,
-            ..
-        } = self;
         let mut start = start.into().unwrap_or(*self.location);
-        let cx_type = cx_type.child();
 
         let mut look_ahead = if start == *self.location {
             self.look_ahead.clone()
@@ -327,18 +370,11 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
         };
 
         let out = T::parse(
-            ParseContext {
-                src: src,
-                location: &mut start,
-                error: &mut ParseError {
-                    location: Location::MAX,
-                    ..default()
-                },
-                look_ahead: &mut look_ahead,
-                discard,
-                cx_type,
-                _cx_type: PhantomData,
-            },
+            self.by_ref().update(ParseContextUpdate {
+                look_ahead: Some(&mut look_ahead),
+                location: Some(&mut start),
+                ..default()
+            }),
             next,
         )?;
 
