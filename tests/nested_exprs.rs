@@ -45,11 +45,13 @@ rs_typed_parser::define_rule!(
     pub struct Ident {
         inner: DualParse<Token<IdentString>, IdentParts>,
     }
+    #[transform(
+        ignore_after<Token<Space>>,
+        discard_before<Token<LBracket>>,
+        discard_after<Token<RBracket>>,
+    )]
     pub struct BracketedIdent {
-        l_bracket: Discard<Token<LBracket>>,
         ident: Ident,
-        #[transform(ignore_before<Token<Space>>)]
-        r_bracket: Discard<Token<RBracket>>,
     }
     pub struct BracketedNumber {
         l_bracket: Discard<Token<LBracket>>,
@@ -112,7 +114,7 @@ pub fn parse_test3() {
                 {
                     {
                         a + foo_bar + {
-                            {{a,b}},
+                            {{a,[b] + [1]}},
                         }
                     }-{}
                 }
