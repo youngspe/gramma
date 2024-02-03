@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 
 use crate::Rule;
 
-use super::{DelimitedList, Ignore, TransformList};
+use super::{CompoundToken, DelimitedList, DualParse, Ignore, TransformList};
 
 pub trait TransformInto<Out> {
     type Input;
@@ -85,5 +85,28 @@ impl<In: Rule, Out, X: TransformInto<Out, Input = In>> TransformInto<Vec<Out>> f
 
     fn transform(input: Self::Input) -> Vec<Out> {
         input.items
+    }
+}
+
+#[non_exhaustive]
+pub struct compound_token {}
+
+impl<T: Rule> TransformInto<T> for compound_token {
+    type Input = CompoundToken<T>;
+
+    fn transform(input: Self::Input) -> T {
+        input.value
+    }
+}
+
+pub struct parse_as<Outer> {
+    _outer: PhantomData<Outer>,
+}
+
+impl<Outer: Rule, Inner: Rule> TransformInto<Inner> for parse_as<Outer> {
+    type Input = DualParse<Outer, Inner>;
+
+    fn transform(input: Self::Input) -> Inner {
+        input.inner
     }
 }
