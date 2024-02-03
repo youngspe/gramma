@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 
 use crate::Rule;
 
-use super::{CompoundToken, DelimitedList, DualParse, Ignore, NotParse, TransformList};
+use super::{CompoundToken, DelimitedList, Discard, DualParse, Ignore, NotParse, TransformList};
 
 pub trait TransformInto<Out> {
     type Input;
@@ -74,7 +74,33 @@ impl<T: Rule, S: Rule> TransformInto<T> for ignore_after<S> {
     }
 }
 
-pub type ignore_around<S> = compose<ignore_before<S>, ignore_after<S>>;
+pub type ignore_around<S1, S2 = S1> = compose<ignore_before<S1>, ignore_after<S2>>;
+
+pub struct discard_before<S> {
+    _space: PhantomData<S>,
+}
+
+impl<T: Rule, S: Rule> TransformInto<T> for discard_before<S> {
+    type Input = (Discard<S>, T);
+
+    fn transform((_, out): Self::Input) -> T {
+        out
+    }
+}
+
+pub struct discard_after<S> {
+    _space: PhantomData<S>,
+}
+
+impl<T: Rule, S: Rule> TransformInto<T> for discard_after<S> {
+    type Input = (T, Discard<S>);
+
+    fn transform((out, _): Self::Input) -> T {
+        out
+    }
+}
+
+pub type discard_around<S1, S2 = S1> = compose<discard_before<S1>, discard_after<S2>>;
 
 pub struct for_each<X> {
     _x: PhantomData<X>,
