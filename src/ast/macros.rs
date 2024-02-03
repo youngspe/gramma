@@ -78,7 +78,7 @@ macro_rules! _rule_field_input_types {
         $crate::ast::Transformed<$Field, $x1>
     };
 
-    (#[transform($x1:ty, $x2:ty, $($x:ty),* $(,)?)] $Field:ty $(,)?) => {
+    (#[transform($x1:ty, $x2:ty $(,$x:ty)* $(,)?)] $Field:ty $(,)?) => {
         $crate::_rule_field_input_types! {
             #[transform($crate::ast::transform::compose<$x1, $x2>, $($x),*)]
             $(#$attr)*
