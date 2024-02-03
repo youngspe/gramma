@@ -20,7 +20,9 @@ macro_rules! _enum_from_inner {
         $( $Var:ident { $($field:ident),* $(,)? } ),+ $(,)?
     }} => {
         match $inner {
-            $crate::Either::Left($crate::_into_pairs!($($field0)*)) => Self::$Var0 { $($field0),* },
+            $crate::Either::Left($crate::ast::Transformed {
+                value: $crate::_into_pairs!( $($field0)* ), ..
+            }) => Self::$Var0 { $($field0: $field0.value),* },
             $crate::Either::Right(inner) => $crate::_enum_from_inner! {
                 inner => { $($Var { $($field),* }),+ }
             }
@@ -30,7 +32,204 @@ macro_rules! _enum_from_inner {
         $Var0:ident { $($field0:ident),* $(,)? } $(,)?
     }} => {
         match $inner {
-            $crate::_into_pairs!($($field0)*) => Self::$Var0 { $($field0),* },
+            $crate::ast::Transformed {
+                value: $crate::_into_pairs!( $($field0)* ), ..
+            } => Self::$Var0 { $($field0: $field0.value),* },
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! _rule_field_input_types {
+    (
+        $(#$attr1:tt)* $Field1:ty,
+        $($(#$attr:tt)* $Field:ty),+ $(,)?
+    ) => { (
+            $crate::_rule_field_input_types! { $(#$attr1)* $Field1 },
+            $crate::_rule_field_input_types! { $($(#$attr)* $Field),+ },
+    ) };
+
+    (
+        #[transform($($x1:ty),* $(,)?)]
+        #[transform($($x2:ty),* $(,)?)]
+        $(#$attr:tt)* $Field:ty $(,)?) => {
+        $crate::_rule_field_input_types! {
+            #[transform($($x1),* $(,$x2)*)]
+            $(#$attr)*
+            $Field
+        }
+    };
+    (#[transform()] $(#$attr:tt)* $Field:ty $(,)?) => {
+        $crate::_rule_field_input_types! {
+            $(#$attr)*
+            $Field
+        }
+    };
+    (#[transform $x:tt] #$attr1:tt $(#$attr:tt)* $Field:ty $(,)?) => {
+        $crate::_rule_field_input_types! {
+            #[transform $x]
+            $(#$attr)*
+            $Field
+        }
+    };
+
+    (#[transform($x1:ty $(,)?)] $Field:ty $(,)?) => {
+        $crate::ast::Transformed<$Field, $x1>
+    };
+
+    (#[transform($x1:ty, $x2:ty, $($x:ty),* $(,)?)] $Field:ty $(,)?) => {
+        $crate::_rule_field_input_types! {
+            #[transform($crate::ast::transform::compose<$x1, $x2>, $($x),*)]
+            $(#$attr)*
+            $Field
+        }
+    };
+
+    (#[transform $($x:tt)*] $($rest:tt)*) => {
+        ::core::compile_error!(::core::concat!("Invalid transform value ", ::core::stringify!($($x)*)))
+    };
+
+    (#$attr1:tt $(#$attr:tt)? $Field:ty $(,)?) => {
+        $crate::_rule_field_input_types! {
+            $(#$attr)* $Field
+        }
+    };
+
+    ($Field:ty $(,)?) => {
+        $crate::ast::Transformed<$Field, $crate::ast::transform::identity>
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! _define_rule_struct {
+    (#[transform $($x:tt)*] $($rest:tt)*) => {
+        $crate::_define_rule_struct! { $($rest)* }
+    };
+    (
+        $(#$attr:tt)*
+        $vis:vis struct $Name:ident {$(,)?} [$($out:tt)*]
+    ) => {
+        $(#$attr)*
+        $vis struct $Name { $($out)* }
+    };
+    (
+        $(#$attr:tt)*
+        $vis:vis struct $Name:ident {
+            #[transform $($x:tt)*] $($rest:tt)*
+        } $out:tt
+    ) => {
+        $crate::_define_rule_struct! {
+            $(#$attr)*
+            $vis struct $Name { $($rest)* } $out
+        }
+    };
+    (
+        $(#$attr:tt)*
+        $vis:vis struct $Name:ident {
+            $(#$field_attr:tt)*
+            _: $Field:ty
+
+            $(, $($rest:tt)*)?
+        } $out:tt
+    ) => {
+        $crate::_define_rule_struct! {
+            $(#$attr)*
+            $vis struct $Name { $($($rest)*)? } $out
+        }
+    };
+    (
+        $(#$attr:tt)*
+        $vis:vis struct $Name:ident {
+            $(#$field_attr:tt)*
+            $field_vis:vis $field:ident
+            : $Field:ty
+
+            $(, $($rest:tt)*)?
+        } [$($out:tt)*]
+    ) => {
+        $crate::_define_rule_struct! {
+            $(#$attr)*
+            $vis struct $Name { $($($rest)*)? } [
+                $($out)*
+                $(#$field_attr)*
+                $field_vis $field: $Field,
+            ]
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! _define_rule_enum {
+    (#[transform $($x:tt)*] $($rest:tt)*) => {
+        $crate::_define_rule_enum! { $($rest)* }
+    };
+    (
+        $(#$attr:tt)*
+        $vis:vis enum $Name:ident {$(,)?} [$($out:tt)*] []
+    ) => {
+        $(#$attr)*
+        $vis enum $Name { $($out)* }
+    };
+    (
+        $(#$attr:tt)*
+        $vis:vis enum $Name:ident {
+            #[transform $($x:tt)*] $($rest:tt)*
+
+        } $out:tt $var_out:tt
+    ) => {
+        $crate::_define_rule_enum! {
+            $(#$attr)*
+            $vis enum $Name { $($rest)* } $out $var_out
+        }
+    };
+    (
+        $(#$attr:tt)*
+        $vis:vis enum $Name:ident {
+            $(#$var_attr:tt)*
+            $Var:ident { $(,)? }
+            $(, $($rest:tt)*)?
+        } [$($out:tt)*] [$($var_out:tt)*]
+    ) => {
+        $crate::_define_rule_enum! {
+            $(#$attr)*
+            $vis enum $Name { $($($rest)*)? } [$($out)* $Var {$($var_out)*},] []
+        }
+    };
+    (
+        $(#$attr:tt)*
+        $vis:vis enum $Name:ident {
+            $(#$var_attr:tt)*
+            $Var:ident {
+                #[transform $($x:tt)*] $($var_rest:tt)*
+            }
+            $(, $($rest:tt)*)?
+        } $out:tt $var_out:tt
+    ) => {
+        $crate::_define_rule_enum! {
+            $(#$attr)*
+            $vis enum $Name { $Var {$($var_rest)*} $(, $($rest)*)? }
+            $out $var_out
+        }
+    };
+    (
+        $(#$attr:tt)*
+        $vis:vis enum $Name:ident {
+            $(#$var_attr:tt)*
+            $Var:ident {
+                $(#$field_attr:tt)*
+                $field:ident: $Field:ty
+                $(, $($var_rest:tt)*)?
+            }
+            $(, $($rest:tt)*)?
+        } $out:tt [$($var_out:tt)*]
+    ) => {
+        $crate::_define_rule_enum! {
+            $(#$attr)*
+            $vis enum $Name { $(#$var_attr)* $Var { $($($var_rest)*)? } $(,$($rest)*)* }
+            $out [$($var_out)* $(#$field_attr)* $field: $Field,]
         }
     };
 }
@@ -40,94 +239,132 @@ macro_rules! _enum_from_inner {
 macro_rules! _define_rule {
     (
         $(#$attr:tt)*
-        $vis:vis struct $Name:ident {
-            $($field_vis:vis $field:ident: $Field:ty),* $(,)?
-        }
+        $vis:vis struct $Name:ident { $(
+            $(#$field_attr:tt)*
+            $($field_vis:vis $field:ident)?
+            $(_ $(@!$under:tt!@)?)?
+            : $Field:ty
+        ),* $(,)? }
     ) => {
-        $(#$attr)*
-        $vis struct $Name {
-            $($field_vis $field: $Field,)*
+
+        $crate::_define_rule_struct! {
+            $(#$attr)*
+            $vis struct $Name {
+                $(
+                    $($field_vis $field)?
+                    $(_ $(@!$under!@)?)?
+                    : $Field,
+                )*
+            } []
         }
 
-        impl $crate::ast::TransformRule for $Name {
-            type Inner = $crate::_into_pairs!($(($Field))*);
+        const _: () = {
+            use $crate::ast::transform::*;
 
-            fn from_inner($crate::_into_pairs!($($field)*): Self::Inner) -> Self {
-                Self { $($field),* }
-            }
+            impl $crate::ast::TransformRule for $Name {
+                type Inner = $crate::_rule_field_input_types!(
+                    $(#$attr)*
+                    $crate::_rule_field_input_types!($( $(#$field_attr)* $Field,)*)
+                );
 
-            fn print_tree(
-                &self,
-                cx: &$crate::ast::print::PrintContext,
-                f: &mut ::core::fmt::Formatter,
-            ) -> ::core::fmt::Result {
-                let Self { $($field), * } = self;
-                f.write_str(::core::stringify!($Name))?;
-                f.write_str(" -> ")?;
-                cx.debug_rule(f, [$($field as &dyn $crate::ast::Rule),*])
-            }
+                fn from_inner(_inner: Self::Inner) -> Self {
+                    let $crate::_into_pairs!($(
+                        $($field)?
+                        $(_ $(@!$under!@)?)?
+                    )*) = _inner.value;
+                    Self { $($($field: $field.value)?),* }
+                }
 
-            fn name() -> &'static str {
-                ::core::stringify!($Name)
+                fn print_tree(
+                    &self,
+                    cx: &$crate::ast::print::PrintContext,
+                    f: &mut ::core::fmt::Formatter,
+                ) -> ::core::fmt::Result {
+                    let Self { $($($field)?),* } = self;
+                    f.write_str(::core::stringify!($Name))?;
+                    f.write_str(" -> ")?;
+                    cx.debug_rule(f, [$($($field as &dyn $crate::ast::Rule,)*)*])
+                }
+
+                fn name() -> &'static str {
+                    ::core::stringify!($Name)
+                }
             }
-        }
+        };
 
         impl ::core::fmt::Debug for $Name {
             fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-                let Self { $($field), * } = self;
+                let Self { $($($field)?), * } = self;
                 f.write_str(::core::stringify!($Name))?;
                 f.write_str(" -> ")?;
-                f.debug_set()$(.entry($field))*.finish()
+                f.debug_set()$($(.entry($field))?)*.finish()
             }
         }
     };
 
     (
         $(#$attr:tt)*
-        $vis:vis enum $Name:ident {
-            $($Var:ident { $($field:ident : $Field:ty),* $(,)? }),* $(,)?
-        }
+            $vis:vis enum $Name:ident { $(
+                $(#$var_attr:tt)*
+                $Var:ident { $(
+                    $(#$field_attr:tt)*
+                    $field:ident : $Field:ty
+                ),* $(,)? }
+        ),* $(,)? }
     ) => {
-        $(#$attr)*
-        $vis enum $Name {
-            $($Var { $($field: $Field,)* }),*
+
+        $crate::_define_rule_enum! {
+            $(#$attr)*
+            $vis enum $Name {
+                $($(#$var_attr)* $Var { $($(#$field_attr)* $field: $Field,)* }),*
+            } [] []
         }
 
-        impl $crate::ast::TransformRule for $Name {
-            type Inner = $crate::_into_either_ty!(
-                $( $crate::_into_pairs!($(($Field))*) ),*
-            );
+        const _: () = {
+            use $crate::ast::transform::*;
 
-            fn from_inner(inner: Self::Inner) -> Self {
-                $crate::_enum_from_inner! { inner => {
-                    $($Var { $($field),* } ),*
-                } }
-            }
+            impl $crate::ast::TransformRule for $Name {
+                type Inner = $crate::_rule_field_input_types!(
+                    $(#$attr)*
+                    $crate::_into_either_ty!($(
+                        $crate::_rule_field_input_types!($(#$var_attr)* $crate::_rule_field_input_types!(
+                            $($(#$field_attr)* $Field),*
+                        ))
+                    ),* )
+                );
 
-            fn print_tree(
-                &self,
-                cx: &$crate::ast::print::PrintContext,
-                f: &mut ::core::fmt::Formatter,
-            ) -> ::core::fmt::Result {
-                match self {$(
-                    Self::$Var{ $($field),* } => {
-                        if cx.is_debug() {
-                            f.write_str(::core::concat!(
-                                ::core::stringify!($Name),
-                                "::",
-                                ::core::stringify!($Var),
-                                " -> ",
-                            ))?;
+                fn from_inner(inner: Self::Inner) -> Self {
+                    let inner = inner.value;
+                    $crate::_enum_from_inner! { inner => {
+                        $($Var { $($field),* } ),*
+                    } }
+                }
+
+                fn print_tree(
+                    &self,
+                    cx: &$crate::ast::print::PrintContext,
+                    f: &mut ::core::fmt::Formatter,
+                ) -> ::core::fmt::Result {
+                    match self {$(
+                        Self::$Var{ $($field),* } => {
+                            if cx.is_debug() {
+                                f.write_str(::core::concat!(
+                                    ::core::stringify!($Name),
+                                    "::",
+                                    ::core::stringify!($Var),
+                                    " -> ",
+                                ))?;
+                            }
+                            cx.debug_rule(f, [$($field as &dyn $crate::ast::Rule),*])
                         }
-                        cx.debug_rule(f, [$($field as &dyn $crate::ast::Rule),*])
-                    }
-                )*}
-            }
+                    )*}
+                }
 
-            fn name() -> &'static str {
-                ::core::stringify!($Name)
+                fn name() -> &'static str {
+                    ::core::stringify!($Name)
+                }
             }
-        }
+        };
 
         impl ::core::fmt::Debug for $Name {
             fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {

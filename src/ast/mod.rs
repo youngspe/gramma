@@ -1,5 +1,6 @@
 mod macros;
 pub mod print;
+pub mod transform;
 
 use std::{
     any::{Any, TypeId},
@@ -21,7 +22,10 @@ use crate::{
     utils::{default, simple_name, try_run, DebugFn, MyTry},
 };
 
-use self::print::{PrintContext, PrintVisibility};
+use self::{
+    print::{PrintContext, PrintVisibility},
+    transform::{identity, TransformInto},
+};
 
 pub struct WithSource<'src, T: ?Sized> {
     pub src: &'src str,
@@ -274,7 +278,61 @@ where
     }
 }
 
-impl<T: Rule> Rule for Vec<T> {
+pub struct TransformList<T, X: TransformInto<T>> {
+    pub items: Vec<T>,
+    _x: PhantomData<X>,
+}
+
+impl<T: Debug, X: TransformInto<T>> Debug for TransformList<T, X> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Debug::fmt(&self.items, f)
+    }
+}
+
+impl<In: Rule, Out: Rule, X: TransformInto<Out, Input = In> + 'static> Rule
+    for TransformList<Out, X>
+{
+    fn print_name(f: &mut Formatter) -> fmt::Result {
+        f.write_str("List(")?;
+        In::print_name(f)?;
+        f.write_str(")")
+    }
+
+    fn print_tree(&self, cx: &PrintContext, f: &mut Formatter) -> fmt::Result {
+        cx.debug_list(f, self.items.iter().map(|item| item as _))
+    }
+
+    fn pre_parse<Cx: CxType>(
+        cx: ParseContext<Cx>,
+        state: PreParseState,
+        next: &RuleType<Cx>,
+    ) -> RuleParseResult<()> {
+        ListNodePlaceholder::<In>::pre_parse(cx, state, next)
+    }
+
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
+    where
+        Self: Sized,
+    {
+        let mut items = Vec::new();
+        let item_next = RuleType::new_repeating::<In>(next);
+        let discard = cx.should_discard();
+
+        while let Some(item) = Rule::parse(cx.by_ref(), &item_next)? {
+            if !discard {
+                items.push(X::transform(item));
+            }
+        }
+
+        Ok(Self {
+            items,
+            _x: PhantomData,
+        })
+    }
+}
+
+impl<T: Rule> TransformRule for Vec<T> {
+    type Inner = TransformList<T, identity>;
     fn print_name(f: &mut Formatter) -> fmt::Result {
         f.write_str("Vec(")?;
         T::print_name(f)?;
@@ -285,29 +343,8 @@ impl<T: Rule> Rule for Vec<T> {
         cx.debug_list(f, self.iter().map(|item| item as _))
     }
 
-    fn pre_parse<Cx: CxType>(
-        cx: ParseContext<Cx>,
-        state: PreParseState,
-        next: &RuleType<Cx>,
-    ) -> RuleParseResult<()> {
-        ListNodePlaceholder::<T>::pre_parse(cx, state, next)
-    }
-
-    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
-    where
-        Self: Sized,
-    {
-        let mut out = Vec::new();
-        let item_next = RuleType::new_repeating::<T>(next);
-        let discard = cx.should_discard();
-
-        while let Some(item) = Rule::parse(cx.by_ref(), &item_next)? {
-            if !discard {
-                out.push(item);
-            }
-        }
-
-        Ok(out)
+    fn from_inner(inner: Self::Inner) -> Self {
+        inner.items
     }
 }
 
@@ -857,8 +894,7 @@ impl<Outer: Rule, Inner: Rule> Rule for DualParse<Outer, Inner> {
         let src = cx.src();
         let start = cx.location();
 
-        let (outer, GetLocation { location: end }) =
-            <(Outer, GetLocation)>::parse(cx.by_ref(), next)?;
+        let (outer, end) = <(Outer, Location)>::parse(cx.by_ref(), next)?;
 
         let (inner, _) = match cx.by_ref().update(ParseContextUpdate {
             src: Some(&src[..end.position]),
@@ -1048,12 +1084,7 @@ impl<T: Rule> TransformRule for Silent<T> {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct GetLocation {
-    pub location: Location,
-}
-
-impl Rule for GetLocation {
+impl Rule for Location {
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
         state: PreParseState,
@@ -1069,9 +1100,7 @@ impl Rule for GetLocation {
     where
         Self: Sized,
     {
-        Ok(Self {
-            location: cx.location(),
-        })
+        Ok(cx.location())
     }
 }
 
@@ -1191,6 +1220,30 @@ impl<T: Rule, After: Rule> Rule for Partial<T, After> {
         Self: Sized,
     {
         T::parse(cx, &RuleType::new::<After>(next)).map(Self::new)
+    }
+}
+
+pub struct Transformed<T, X> {
+    pub value: T,
+    _x: PhantomData<X>,
+}
+
+impl<T, X> Debug for Transformed<T, X> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Transformed").finish_non_exhaustive()
+    }
+}
+
+impl<In: Rule, Out: 'static, X: TransformInto<Out, Input = In> + 'static> TransformRule
+    for Transformed<Out, X>
+{
+    type Inner = In;
+
+    fn from_inner(input: Self::Inner) -> Self {
+        Self {
+            value: X::transform(input),
+            _x: PhantomData,
+        }
     }
 }
 

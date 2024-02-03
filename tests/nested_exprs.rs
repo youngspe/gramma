@@ -5,55 +5,56 @@ use rs_typed_parser::ast::{
 type Blank = Ignore<Token<Space>>;
 
 rs_typed_parser::define_rule!(
+    #[transform(ignore_before<Token<Space>>)]
     pub struct Braces {
         l_brace: Discard<Token<LBrace>>,
         inner: DelimitedList<Expr, (Blank, Token<Comma>)>,
-        _space1: Blank,
+        #[transform(ignore_before<Token<Space>>)]
         r_brace: Discard<Token<RBrace>>,
     }
     pub struct Expr {
-        value: InfixChain<BaseExpr, (Blank, InfixOp)>,
+        value: InfixChain<BaseExpr, InfixOp>,
     }
     pub enum BaseExpr {
         Ident {
-            _space1: Blank,
             ident: Ident,
         },
         Braces {
-            _space1: Blank,
             braces: Braces,
         },
+        #[transform(ignore_before<Token<Space>>)]
         BracketedIdent {
-            _space1: Blank,
             bracketed: CompoundToken<BracketedIdent>,
         },
+        #[transform(ignore_before<Token<Space>>)]
         BracketedNumber {
-            _space1: Blank,
             bracketed: CompoundToken<BracketedNumber>,
         },
     }
+
+    #[transform(ignore_before<Token<Space>>)]
     pub enum InfixOp {
-        Plus { _space1: Blank, value: Token<Plus> },
+        Plus { value: Token<Plus> },
         Minus { value: Token<Minus> },
     }
+
     pub struct IdentParts {
         parts: DelimitedList<Token<IdentPart>, Token<Underscore>>,
     }
+    #[transform(ignore_before<Token<Space>>)]
     pub struct Ident {
         inner: DualParse<Token<IdentString>, IdentParts>,
     }
     pub struct BracketedIdent {
         l_bracket: Discard<Token<LBracket>>,
-        _space1: Blank,
         ident: Ident,
-        _space2: Blank,
+        #[transform(ignore_before<Token<Space>>)]
         r_bracket: Discard<Token<RBracket>>,
     }
     pub struct BracketedNumber {
         l_bracket: Discard<Token<LBracket>>,
-        _space1: Blank,
+        #[transform(ignore_around<Token<Space>>)]
         ident: Token<Digits>,
-        _space2: Blank,
         r_bracket: Discard<Token<RBracket>>,
     }
 );
@@ -87,9 +88,10 @@ rs_typed_parser::define_token!(
 
 #[test]
 pub fn parse_test1() {
-    let src = "{a,{a, {{{ a +foo_bar+ {{{a,b}}}}-{}}},b,}, b  }";
+    let src = "{a,{a, {{{ a +foo_bar+ {{{a,b} }}}-{}}},b,}, b +b }";
     let ast = rs_typed_parser::parse_tree::<Braces, 1>(src).unwrap();
     println!("{:#}", WithSource { src, ast });
+    let x: <Braces as rs_typed_parser::ast::TransformRule>::Inner;
 }
 
 #[test]
