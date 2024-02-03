@@ -1439,7 +1439,7 @@ pub struct NotParse<Invalid, Valid> {
 }
 
 impl<Invalid: Rule, Valid: Rule> TransformRule for NotParse<Invalid, Valid> {
-    type Inner = Either<CompoundToken<(Invalid, Reject)>, Valid>;
+    type Inner = Either<CompoundToken<(Discard<Invalid>, Reject)>, Valid>;
 
     fn from_inner(inner: Self::Inner) -> Self {
         Self {
