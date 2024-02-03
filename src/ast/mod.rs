@@ -618,10 +618,18 @@ impl<T0: Rule, T1: Rule, T2: Rule, T3: Rule> TransformRule for (T0, T1, T2, T3) 
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Token<T> {
     pub range: LocationRange,
-    pub value: Option<T>,
+    _t: PhantomData<T>,
+}
+
+impl<T> Copy for Token<T> {}
+
+impl<T> Clone for Token<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 impl<T: TokenDef> Debug for Token<T> {
@@ -641,7 +649,10 @@ impl<T: TokenDef> From<Token<T>> for AnyToken {
 
 impl<T> From<LocationRange> for Token<T> {
     fn from(range: LocationRange) -> Self {
-        Self { range, value: None }
+        Self {
+            range,
+            _t: PhantomData,
+        }
     }
 }
 
@@ -721,16 +732,13 @@ impl<T: TokenDef> Rule for Token<T> {
                     return Err(RuleParseFailed { location });
                 }
                 cx.advance();
-                return Ok(Self {
-                    range: token.range,
-                    value: None,
-                });
+                return Ok(token.range.into());
             }
 
             let range = T::try_lex(cx.src(), location).ok_or(RuleParseFailed { location })?;
             cx.set_location(range.end);
 
-            Ok(Self { range, value: None })
+            Ok(range.into())
         })
         .break_also(|err| {
             cx.error_mut()

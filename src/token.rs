@@ -6,20 +6,13 @@ use std::{
 };
 
 use crate::{
+    ast::{Discard, Token, TransformRule},
     parse::{CxType, Location, LocationRange},
     utils::simple_name,
 };
 
 pub trait TokenDef: Any {
     fn try_lex(src: &str, location: Location) -> Option<LocationRange>;
-
-    fn from_range(src: &str, range: LocationRange) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        let _ = (src, range);
-        None
-    }
 
     fn name() -> &'static str {
         simple_name::<Self>()
@@ -123,12 +116,16 @@ impl TokenDef for Eof {
         })
     }
 
-    fn from_range(_: &str, _: LocationRange) -> Option<Self> {
-        Some(Self)
-    }
-
     fn name() -> &'static str {
         "end-of-file"
+    }
+}
+
+impl TransformRule for Eof {
+    type Inner = Discard<Token<Eof>>;
+
+    fn from_inner(_: Self::Inner) -> Self {
+        Self
     }
 }
 
@@ -174,12 +171,31 @@ macro_rules! _define_token {
             f.write_str(::core::stringify!($pattern))
         }
     };
+    (@impl_rule $Name:ident ($Ty:ty)) => {
+        impl $crate::ast::TransformRule for $name {
+            type Inner = $crate::ast::DualParse<$crate::ast::Discard<$crate::ast::Token<$Name>>, $Ty>>;
+
+            fn from_inner(inner: Self::Inner) -> Self {
+                Self(inner.inner)
+            }
+        }
+    };
+    (@impl_rule $Name:ident) => {
+        impl $crate::ast::TransformRule for $Name {
+            type Inner = $crate::ast::Discard<$crate::ast::Token<$Name>>;
+
+            fn from_inner(_: Self::Inner) -> Self {
+                Self
+            }
+        }
+    };
     ($(
         #[pattern $pattern:tt]
         $(#$attr:tt)*
         $vis:vis struct $Name:ident $(($Ty:ty))?;
     )*) => {$(
         $(#[$attr])*
+        #[derive(Debug)]
         pub struct $Name $(($Ty))?;
 
         impl $crate::token::TokenDef for $Name {
@@ -188,13 +204,9 @@ macro_rules! _define_token {
             fn display_name() -> &'static str {
                 ::core::stringify!($Name)
             }
-
-            fn from_range(_src: &str, _range: $crate::parse::LocationRange) -> ::core::option::Option<Self> {
-                ::core::option::Option::Some(Self $( (::core::convert::TryInto::<$Ty>::try_into(
-                    &_src[_range.start.position.._range.end.position]
-                ).ok()?) )?)
-            }
         }
+
+        $crate::_define_token! { @impl_rule $Name $(($Ty:ty))? }
     )*};
 }
 

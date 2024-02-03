@@ -1,6 +1,7 @@
 #[doc(hidden)]
 #[macro_export]
 macro_rules! _into_pairs {
+    () => { () };
     ($x:tt $($y:tt)+ ) => { ($x,  $crate::_into_pairs! { $($y)+ }) };
     ($x:tt) => { $x };
 }
@@ -8,6 +9,7 @@ macro_rules! _into_pairs {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! _into_either_ty {
+    ($(,)?) => { $crate::ast::Reject };
     ($x:ty, $($y:ty),+ $(,)? ) => { $crate::Either<$x,  $crate::_into_either_ty! { $($y),+ }> };
     ($x:ty $(,)?) => { $x };
 }
@@ -37,11 +39,15 @@ macro_rules! _enum_from_inner {
             } => Self::$Var0 { $($field0: $field0.value),* },
         }
     };
+    ($inner:expr => { $(,)? }) => {
+        match $inner {}
+    };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! _rule_field_input_types {
+    ($(,)?) => { () };
     (
         $(#$attr1:tt)* $Field1:ty,
         $($(#$attr:tt)* $Field:ty),+ $(,)?
@@ -344,8 +350,8 @@ macro_rules! _define_rule {
                     cx: &$crate::ast::print::PrintContext,
                     f: &mut ::core::fmt::Formatter,
                 ) -> ::core::fmt::Result {
-                    match self {$(
-                        Self::$Var{ $($field),* } => {
+                    match *self {$(
+                        Self::$Var{ $(ref $field),* } => {
                             if cx.is_debug() {
                                 f.write_str(::core::concat!(
                                     ::core::stringify!($Name),
@@ -367,8 +373,8 @@ macro_rules! _define_rule {
 
         impl ::core::fmt::Debug for $Name {
             fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-                match self {$(
-                    Self::$Var{ $($field),* } => {
+                match *self {$(
+                    Self::$Var{ $(ref $field),* } => {
                         f.write_str(::core::concat!(
                             ::core::stringify!($Name),
                             "::",

@@ -1,16 +1,16 @@
 use rs_typed_parser::ast::{
-    CompoundToken, DelimitedList, Discard, DualParse, Ignore, InfixChain, Token, WithSource,
+    CompoundToken, DelimitedList, Discard, DualParse, Ignore, InfixChain, WithSource,
 };
 
-type Blank = Ignore<Token<Space>>;
+type Blank = Ignore<Space>;
 
 rs_typed_parser::define_rule!(
-    #[transform(ignore_before<Token<Space>>)]
+    #[transform(ignore_before<Space>)]
     pub struct Braces {
-        l_brace: Discard<Token<LBrace>>,
-        inner: DelimitedList<Expr, (Blank, Token<Comma>)>,
-        #[transform(ignore_before<Token<Space>>)]
-        r_brace: Discard<Token<RBrace>>,
+        l_brace: Discard<LBrace>,
+        inner: DelimitedList<Expr, (Blank, Comma)>,
+        #[transform(ignore_before<Space>)]
+        r_brace: Discard<RBrace>,
     }
     pub struct Expr {
         value: InfixChain<BaseExpr, InfixOp>,
@@ -22,42 +22,42 @@ rs_typed_parser::define_rule!(
         Braces {
             braces: Braces,
         },
-        #[transform(ignore_before<Token<Space>>)]
+        #[transform(ignore_before<Space>)]
         BracketedIdent {
             bracketed: CompoundToken<BracketedIdent>,
         },
-        #[transform(ignore_before<Token<Space>>)]
+        #[transform(ignore_before<Space>)]
         BracketedNumber {
             bracketed: CompoundToken<BracketedNumber>,
         },
     }
 
-    #[transform(ignore_before<Token<Space>>)]
+    #[transform(ignore_before<Space>)]
     pub enum InfixOp {
-        Plus { value: Token<Plus> },
-        Minus { value: Token<Minus> },
+        Plus { value: Plus },
+        Minus { value: Minus },
     }
 
     pub struct IdentParts {
-        parts: DelimitedList<Token<IdentPart>, Token<Underscore>>,
+        parts: DelimitedList<IdentPart, Underscore>,
     }
-    #[transform(ignore_before<Token<Space>>)]
+    #[transform(ignore_before<Space>)]
     pub struct Ident {
-        inner: DualParse<Token<IdentString>, IdentParts>,
+        inner: DualParse<IdentString, IdentParts>,
     }
     #[transform(
-        ignore_after<Token<Space>>,
-        discard_before<Token<LBracket>>,
-        discard_after<Token<RBracket>>,
+        ignore_after<Space>,
+        discard_before<LBracket>,
+        discard_after<RBracket>,
     )]
     pub struct BracketedIdent {
         ident: Ident,
     }
     pub struct BracketedNumber {
-        l_bracket: Discard<Token<LBracket>>,
-        #[transform(ignore_around<Token<Space>>)]
-        ident: Token<Digits>,
-        r_bracket: Discard<Token<RBracket>>,
+        l_bracket: Discard<LBracket>,
+        #[transform(ignore_around<Space>)]
+        ident: Digits,
+        r_bracket: Discard<RBracket>,
     }
 );
 
@@ -93,7 +93,6 @@ pub fn parse_test1() {
     let src = "{a,{a, {{{ a +foo_bar+ {{{a,b} }}}-{}}},b,}, b +b }";
     let ast = rs_typed_parser::parse_tree::<Braces, 1>(src).unwrap();
     println!("{:#}", WithSource { src, ast });
-    let x: <Braces as rs_typed_parser::ast::TransformRule>::Inner;
 }
 
 #[test]
