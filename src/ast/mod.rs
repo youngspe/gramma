@@ -1432,6 +1432,28 @@ impl<T: Rule, Op: Rule> TransformRule for InfixChain<T, Op> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NotParse<Invalid, Valid> {
+    _invalid: PhantomData<Invalid>,
+    pub value: Valid,
+}
+
+impl<Invalid: Rule, Valid: Rule> TransformRule for NotParse<Invalid, Valid> {
+    type Inner = Either<CompoundToken<(Invalid, Reject)>, Valid>;
+
+    fn from_inner(inner: Self::Inner) -> Self {
+        Self {
+            value: match inner {
+                Either::Left(CompoundToken {
+                    value: (_, reject), ..
+                }) => match reject {},
+                Either::Right(value) => value,
+            },
+            _invalid: PhantomData,
+        }
+    }
+}
+
 pub fn extract_actual<'src>(src: &'src str, start: usize) -> &'src str {
     if start >= src.len() {
         return "<end-of-file>";

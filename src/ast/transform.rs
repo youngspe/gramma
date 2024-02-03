@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 
 use crate::Rule;
 
-use super::{CompoundToken, DelimitedList, DualParse, Ignore, TransformList};
+use super::{CompoundToken, DelimitedList, DualParse, Ignore, NotParse, TransformList};
 
 pub trait TransformInto<Out> {
     type Input;
@@ -108,5 +108,17 @@ impl<Outer: Rule, Inner: Rule> TransformInto<Inner> for parse_as<Outer> {
 
     fn transform(input: Self::Input) -> Inner {
         input.inner
+    }
+}
+
+pub struct not<Invalid> {
+    _invalid: PhantomData<Invalid>,
+}
+
+impl<Invalid: Rule, Valid: Rule> TransformInto<Valid> for not<Invalid> {
+    type Input = NotParse<Invalid, Valid>;
+
+    fn transform(input: Self::Input) -> Valid {
+        input.value
     }
 }
