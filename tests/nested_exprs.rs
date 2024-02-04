@@ -63,29 +63,29 @@ rs_typed_parser::define_rule!(
 
 rs_typed_parser::define_token!(
     #[pattern(exact = "[")]
-    struct LBracket;
+    pub struct LBracket;
     #[pattern(exact = "]")]
-    struct RBracket;
+    pub struct RBracket;
     #[pattern(exact = "{")]
-    struct LBrace;
+    pub struct LBrace;
     #[pattern(exact = "}")]
-    struct RBrace;
+    pub struct RBrace;
     #[pattern(exact = ",")]
-    struct Comma;
+    pub struct Comma;
     #[pattern(exact = "+")]
-    struct Plus;
+    pub struct Plus;
     #[pattern(exact = "-")]
-    struct Minus;
+    pub struct Minus;
     #[pattern(exact = "_")]
-    struct Underscore;
+    pub struct Underscore;
     #[pattern(regex = r"[a-zA-Z][a-zA-Z0-9_]*")]
-    struct IdentString;
+    pub struct IdentString;
     #[pattern(regex = r"[a-zA-Z0-9]+")]
-    struct IdentPart;
+    pub struct IdentPart;
     #[pattern(regex = r"[0-9]+")]
-    struct Digits;
+    pub struct Digits;
     #[pattern(regex = r"\s+")]
-    struct Space;
+    pub struct Space;
 );
 
 #[test]

@@ -182,21 +182,46 @@ macro_rules! _define_token {
     };
     (@impl_rule $Name:ident) => {
         impl $crate::ast::TransformRule for $Name {
-            type Inner = $crate::ast::Discard<$crate::ast::Token<$Name>>;
+            type Inner = $crate::ast::Token<$Name>;
 
-            fn from_inner(_: Self::Inner) -> Self {
-                Self
+            fn print_tree(&self, cx: &$crate::ast::print::PrintContext, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+                if cx.is_debug() {
+                    <Self as $crate::token::TokenDef>::print_debug(cx.src(), self.range, f)
+                } else {
+                    <Self as $crate::token::TokenDef>::print_debug(cx.src(), self.range, f)
+                }
+            }
+
+            fn from_inner(inner: Self::Inner) -> Self {
+                Self { range: inner.range }
             }
         }
+    };
+    (@define_struct
+        $(#$attr:tt)*
+        $vis:vis struct $Name:ident ($Ty:ty);
+    ) => {
+        $(#$attr)*
+        #[derive(Debug)]
+        $vis struct $Name ($Ty);
+    };
+    (@define_struct
+        $(#$attr:tt)*
+        $vis:vis struct $Name:ident;
+    ) => {
+        $(#$attr)*
+        #[derive(Debug)]
+        $vis struct $Name { pub range: $crate::parse::LocationRange }
     };
     ($(
         #[pattern $pattern:tt]
         $(#$attr:tt)*
         $vis:vis struct $Name:ident $(($Ty:ty))?;
     )*) => {$(
-        $(#[$attr])*
-        #[derive(Debug)]
-        pub struct $Name $(($Ty))?;
+        $crate::_define_token! {@define_struct
+            $(#$attr)*
+            $vis struct $Name $(($Ty))?;
+        }
 
         impl $crate::token::TokenDef for $Name {
             $crate::_define_token! { @try_lex $Name $pattern }

@@ -1112,6 +1112,40 @@ impl Rule for Location {
     }
 }
 
+impl Rule for LocationRange {
+    fn pre_parse<Cx: CxType>(
+        cx: ParseContext<Cx>,
+        state: PreParseState,
+        next: &RuleType<Cx>,
+    ) -> RuleParseResult<()>
+    where
+        Self: Sized,
+    {
+        let end = Location {
+            position: cx.src().len(),
+        };
+        next.pre_parse(
+            cx,
+            PreParseState {
+                start: end,
+                ..state
+            },
+        )
+    }
+
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, _: &RuleType<Cx>) -> RuleParseResult<Self>
+    where
+        Self: Sized,
+    {
+        let start = cx.location();
+        let end = Location {
+            position: cx.src().len(),
+        };
+        cx.set_location(end);
+        Ok(Self { start, end })
+    }
+}
+
 generic_unit!(
     pub struct Discard<T>;
     pub struct Ignore<T>;
