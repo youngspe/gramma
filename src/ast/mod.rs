@@ -129,7 +129,7 @@ impl<'lt, Cx: CxType> RuleType<'lt, Cx> {
     }
 
     pub fn new_repeating<T: Rule>(next: impl Into<Option<&'lt Self>>) -> Self {
-        Self::new::<ListNodePlaceholder<T>>(next)
+        Self::new::<ListNode<T>>(next)
     }
 
     #[inline]
@@ -307,7 +307,7 @@ impl<In: Rule, Out: Rule, X: TransformInto<Out, Input = In> + 'static> Rule
         state: PreParseState,
         next: &RuleType<Cx>,
     ) -> RuleParseResult<()> {
-        ListNodePlaceholder::<In>::pre_parse(cx, state, next)
+        ListNode::<In>::pre_parse(cx, state, next)
     }
 
     fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
@@ -315,10 +315,9 @@ impl<In: Rule, Out: Rule, X: TransformInto<Out, Input = In> + 'static> Rule
         Self: Sized,
     {
         let mut items = Vec::new();
-        let item_next = RuleType::new_repeating::<In>(next);
         let discard = cx.should_discard();
 
-        while let Some(item) = Rule::parse(cx.by_ref(), &item_next)? {
+        while let Some(item) = ListNode::parse(cx.by_ref(), &next)?.value {
             if !discard {
                 items.push(X::transform(item));
             }
@@ -1207,10 +1206,12 @@ impl<T: Rule> TransformRule for Ignore<T> {
 }
 
 #[derive(Debug)]
-pub struct ListNodePlaceholder<T>(PhantomData<T>);
+pub struct ListNode<T> {
+    value: Option<T>,
+}
 
-impl<T: Rule> TransformRule for ListNodePlaceholder<T> {
-    type Inner = Option<(T, Option<ListNodePlaceholder<T>>)>;
+impl<T: Rule> TransformRule for ListNode<T> {
+    type Inner = Either<Empty, Partial<T, Either<Empty, ListNode<T>>>>;
 
     fn print_name(f: &mut Formatter) -> fmt::Result {
         f.write_str("ListNodePlaceholder(")?;
@@ -1218,8 +1219,13 @@ impl<T: Rule> TransformRule for ListNodePlaceholder<T> {
         f.write_str(")")
     }
 
-    fn from_inner(_: Self::Inner) -> Self {
-        Self(PhantomData)
+    fn from_inner(inner: Self::Inner) -> Self {
+        Self {
+            value: match inner {
+                Either::Left(Empty) => None,
+                Either::Right(Partial { value, .. }) => Some(value),
+            },
+        }
     }
 }
 
@@ -1293,7 +1299,7 @@ impl<In: Rule, Out: 'static, X: TransformInto<Out, Input = In> + 'static> Transf
     }
 }
 
-type DelimitedListPrototypeTail<T, Delim, Trailing> = (ListNodePlaceholder<(Delim, T)>, Trailing);
+type DelimitedListPrototypeTail<T, Delim, Trailing> = (ListNode<(Delim, T)>, Trailing);
 
 type DelimitedListPrototype<T, Delim, Trailing> =
     Option<(T, DelimitedListPrototypeTail<T, Delim, Trailing>)>;
@@ -1305,12 +1311,12 @@ struct DelimitedListTailTrailing<T, Delim> {
 }
 
 impl<T: Rule, Delim: Rule> TransformRule for DelimitedListTailTrailing<T, Delim> {
-    type Inner = Option<(Discard<Delim>, Option<Partial<T, Self>>)>;
+    type Inner = Either<Empty, (Discard<Delim>, Either<Empty, Partial<T, Self>>)>;
 
     fn from_inner(inner: Self::Inner) -> Self {
         let value = match inner {
-            Some((_, Some(Partial { value, .. }))) => Some(value),
-            None | Some((_, None)) => None,
+            Either::Right((_, Either::Right(Partial { value, .. }))) => Some(value),
+            Either::Left(Empty) | Either::Right((_, Either::Left(Empty))) => None,
         };
 
         Self {
@@ -1320,27 +1326,7 @@ impl<T: Rule, Delim: Rule> TransformRule for DelimitedListTailTrailing<T, Delim>
     }
 }
 
-#[derive(Debug)]
-struct DelimitedListTail<T, Delim> {
-    value: Option<T>,
-    _delim: PhantomData<Delim>,
-}
-
-impl<T: Rule, Delim: Rule> TransformRule for DelimitedListTail<T, Delim> {
-    type Inner = Option<(Discard<Delim>, Partial<T, Self>)>;
-
-    fn from_inner(inner: Self::Inner) -> Self {
-        let value = match inner {
-            Some((_, Partial { value, .. })) => Some(value),
-            None => None,
-        };
-
-        Self {
-            value,
-            _delim: PhantomData,
-        }
-    }
-}
+type DelimitedListTail<T, Delim> = ListNode<(Discard<Delim>, T)>;
 
 #[derive(Debug)]
 pub struct DelimitedList<T, Delim, const TRAIL: bool = true> {
@@ -1421,7 +1407,7 @@ impl<T: Rule, Delim: Rule, const TRAIL: bool> Rule for DelimitedList<T, Delim, T
                 out.push(first);
             }
 
-            while let Some(item) = DelimitedListTail::<T, Delim>::parse(cx.by_ref(), next)?.value {
+            while let Some((_, item)) = DelimitedListTail::<T, Delim>::parse(cx.by_ref(), next)?.value {
                 if !discard {
                     out.push(item);
                 }

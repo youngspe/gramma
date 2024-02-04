@@ -91,7 +91,7 @@ rs_typed_parser::define_token!(
 #[test]
 pub fn parse_test1() {
     let src = "{a,{a, {{{ a +foo_bar+ {{{a,b} }}}-{}}},b,}, b +b }";
-    let ast = rs_typed_parser::parse_tree::<Braces, 1>(src).unwrap();
+    let ast = rs_typed_parser::parse_tree::<Braces, 2>(src).unwrap();
     println!("{:#}", WithSource { src, ast });
 }
 
