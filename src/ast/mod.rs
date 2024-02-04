@@ -409,6 +409,10 @@ impl<T: Rule> TransformRule for Option<T> {
 impl<T: Rule> TransformRule for Box<T> {
     type Inner = T;
 
+    fn print_tree(&self, cx: &PrintContext, f: &mut Formatter) -> fmt::Result {
+        (**self).print_tree(cx, f)
+    }
+
     fn from_inner(inner: Self::Inner) -> Self {
         Box::new(inner)
     }
