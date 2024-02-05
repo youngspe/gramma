@@ -372,16 +372,16 @@ macro_rules! _define_rule {
         };
 
         impl ::core::fmt::Debug for $Name {
-            fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+            fn fmt(&self, _f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
                 match *self {$(
                     Self::$Var{ $(ref $field),* } => {
-                        f.write_str(::core::concat!(
+                        _f.write_str(::core::concat!(
                             ::core::stringify!($Name),
                             "::",
                             ::core::stringify!($Var),
                             " -> ",
                         ))?;
-                        f.debug_set()$(.entry($field))*.finish()
+                        _f.debug_set()$(.entry($field))*.finish()
                     }
                 )*}
             }

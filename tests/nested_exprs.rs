@@ -59,6 +59,7 @@ rs_typed_parser::define_rule!(
         ident: Digits,
         r_bracket: Discard<RBracket>,
     }
+    pub enum Empty {}
 );
 
 rs_typed_parser::define_token!(
