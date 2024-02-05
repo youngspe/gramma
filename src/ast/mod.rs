@@ -145,7 +145,7 @@ impl<'lt, Cx: CxType> RuleType<'lt, Cx> {
 
     #[inline]
     pub fn pre_parse(&self, cx: ParseContext<Cx>, state: PreParseState) -> RuleParseResult<()> {
-        if state.dist >= cx.look_ahead().len() {
+        if state.dist > cx.look_ahead().len() {
             return Ok(());
         }
         (self.pre_parse)(cx, state, self.next.unwrap_or_default())
@@ -673,12 +673,12 @@ impl<T: TokenDef> Rule for Token<T> {
             src, look_ahead, ..
         } = cx.as_parts();
 
-        let end = match &mut look_ahead[state.dist..] {
-            [] => return Ok(()),
-            [Some(token), ..] if token.token_type.token_id() == TypeId::of::<T>() => {
+        let end = match look_ahead.get_mut(state.dist..) {
+            None | Some([]) => return Ok(()),
+            Some([Some(token), ..]) if token.token_type.token_id() == TypeId::of::<T>() => {
                 token.range.end
             }
-            [token, ..] => {
+            Some([token, ..]) => {
                 let Some(range) = T::try_lex(src, state.start) else {
                     cx.error_mut()
                         .add_expected(state.start, TokenType::of::<T>());
@@ -1515,19 +1515,46 @@ pub struct NotParse<Invalid, Valid> {
     pub value: Valid,
 }
 
-impl<Invalid: Rule, Valid: Rule> TransformRule for NotParse<Invalid, Valid> {
-    type Inner = Either<CompoundToken<(Silent<Discard<Invalid>>, Reject)>, Valid>;
+impl<Invalid: Rule, Valid: Rule> Rule for NotParse<Invalid, Valid> {
+    fn print_tree(&self, cx: &PrintContext, f: &mut Formatter) -> fmt::Result {
+        self.value.print_tree(cx, f)
+    }
 
-    fn from_inner(inner: Self::Inner) -> Self {
-        Self {
-            value: match inner {
-                Either::Left(CompoundToken {
-                    value: (_, reject), ..
-                }) => match reject {},
-                Either::Right(value) => value,
-            },
+    fn print_visibility(&self, cx: &PrintContext) -> PrintVisibility {
+        self.value.print_visibility(cx)
+    }
+
+    fn pre_parse<Cx: CxType>(
+        mut cx: ParseContext<Cx>,
+        state: PreParseState,
+        next: &RuleType<Cx>,
+    ) -> RuleParseResult<()>
+    where
+        Self: Sized,
+    {
+        let Err(_) = cx.isolated_parse::<(Invalid, Accept)>(None, default()) else {
+            return Err(RuleParseFailed {
+                location: cx.location(),
+            });
+        };
+
+        Valid::pre_parse(cx, state, next)
+    }
+
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
+    where
+        Self: Sized,
+    {
+        let Err(_) = cx.isolated_parse::<(Invalid, Accept)>(None, default()) else {
+            return Err(RuleParseFailed {
+                location: cx.location(),
+            });
+        };
+
+        Ok(Self {
+            value: Valid::parse(cx, next)?,
             _invalid: PhantomData,
-        }
+        })
     }
 }
 
