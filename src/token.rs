@@ -188,7 +188,7 @@ macro_rules! _define_token {
                 if cx.is_debug() {
                     <Self as $crate::token::TokenDef>::print_debug(cx.src(), self.range, f)
                 } else {
-                    <Self as $crate::token::TokenDef>::print_debug(cx.src(), self.range, f)
+                    <Self as $crate::token::TokenDef>::print_display(cx.src(), self.range, f)
                 }
             }
 
