@@ -25,8 +25,8 @@ macro_rules! _enum_from_inner {
             $crate::Either::Left($crate::ast::Transformed {
                 value: $crate::_into_pairs!( $($field0)* ), ..
             }) => Self::$Var0 { $($field0: $field0.value),* },
-            $crate::Either::Right(inner) => $crate::_enum_from_inner! {
-                inner => { $($Var { $($field),* }),+ }
+            $crate::Either::Right(_inner) => $crate::_enum_from_inner! {
+                _inner => { $($Var { $($field),* }),+ }
             }
         }
     };
@@ -339,28 +339,28 @@ macro_rules! _define_rule {
                 );
 
                 fn from_inner(inner: Self::Inner) -> Self {
-                    let inner = inner.value;
-                    $crate::_enum_from_inner! { inner => {
+                    let _inner = inner.value;
+                    $crate::_enum_from_inner! { _inner => {
                         $($Var { $($field),* } ),*
                     } }
                 }
 
                 fn print_tree(
                     &self,
-                    cx: &$crate::ast::print::PrintContext,
-                    f: &mut ::core::fmt::Formatter,
+                    _cx: &$crate::ast::print::PrintContext,
+                    _f: &mut ::core::fmt::Formatter,
                 ) -> ::core::fmt::Result {
                     match *self {$(
                         Self::$Var{ $(ref $field),* } => {
-                            if cx.is_debug() {
-                                f.write_str(::core::concat!(
+                            if _cx.is_debug() {
+                                _f.write_str(::core::concat!(
                                     ::core::stringify!($Name),
                                     "::",
                                     ::core::stringify!($Var),
                                     " -> ",
                                 ))?;
                             }
-                            cx.debug_rule(f, [$($field as &dyn $crate::ast::Rule),*])
+                            _cx.debug_rule(_f, [$($field as &dyn $crate::ast::Rule),*])
                         }
                     )*}
                 }
