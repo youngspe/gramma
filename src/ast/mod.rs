@@ -8,6 +8,7 @@ use std::{
     fmt::{self, Debug, Formatter},
     hash::Hash,
     marker::PhantomData,
+    ops::ControlFlow::{self, Break, Continue},
 };
 
 use either::{for_both, Either};
@@ -278,55 +279,35 @@ where
     }
 }
 
-pub struct TransformList<T, X: TransformInto<T>> {
+pub struct TransformList<
+    T,
+    X: TransformInto<T>,
+    Delim = Empty,
+    const TRAIL: bool = false,
+    const PREFER_SHORT: bool = false,
+> {
     pub items: Vec<T>,
     _x: PhantomData<X>,
+    _delim: PhantomData<Delim>,
 }
 
-impl<T: Debug, X: TransformInto<T>> Debug for TransformList<T, X> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&self.items, f)
-    }
-}
-
-impl<In: Rule, Out: Rule, X: TransformInto<Out, Input = In> + 'static> Rule
-    for TransformList<Out, X>
+impl<T, X: TransformInto<T>, Delim, const TRAIL: bool, const PREFER_SHORT: bool>
+    TransformList<T, X, Delim, TRAIL, PREFER_SHORT>
 {
-    fn print_name(f: &mut Formatter) -> fmt::Result {
-        f.write_str("List(")?;
-        In::print_name(f)?;
-        f.write_str(")")
-    }
-
-    fn print_tree(&self, cx: &PrintContext, f: &mut Formatter) -> fmt::Result {
-        cx.debug_list(f, self.items.iter().map(|item| item as _))
-    }
-
-    fn pre_parse<Cx: CxType>(
-        cx: ParseContext<Cx>,
-        state: PreParseState,
-        next: &RuleType<Cx>,
-    ) -> RuleParseResult<()> {
-        ListNode::<In>::pre_parse(cx, state, next)
-    }
-
-    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
-    where
-        Self: Sized,
-    {
-        let mut items = Vec::new();
-        let discard = cx.should_discard();
-
-        while let Some(item) = ListNode::parse(cx.by_ref(), &next)?.value {
-            if !discard {
-                items.push(X::transform(item));
-            }
-        }
-
-        Ok(Self {
+    pub fn new(items: Vec<T>) -> Self {
+        Self {
             items,
             _x: PhantomData,
-        })
+            _delim: PhantomData,
+        }
+    }
+}
+
+impl<T: Debug, X: TransformInto<T>, Delim, const TRAIL: bool, const PREFER_SHORT: bool> Debug
+    for TransformList<T, X, Delim, TRAIL, PREFER_SHORT>
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Debug::fmt(&self.items, f)
     }
 }
 
@@ -1205,13 +1186,72 @@ impl<T: Rule> TransformRule for Ignore<T> {
     }
 }
 
+impl<B: Rule, C: Rule> Rule for ControlFlow<B, C> {
+    fn print_tree(&self, cx: &PrintContext, f: &mut Formatter) -> fmt::Result {
+        if cx.is_debug() {
+            match self {
+                Continue(_) => {
+                    f.write_str("Continue -> ")?;
+                }
+                Break(_) => {
+                    f.write_str("Break -> ")?;
+                }
+            }
+        }
+
+        match self {
+            Continue(x) => x.print_tree(cx, f),
+            Break(x) => x.print_tree(cx, f),
+        }
+    }
+
+    fn print_visibility(&self, cx: &PrintContext) -> PrintVisibility {
+        match self {
+            Continue(x) => x.print_visibility(cx),
+            Break(x) => x.print_visibility(cx),
+        }
+    }
+
+    fn pre_parse<Cx: CxType>(
+        cx: ParseContext<Cx>,
+        state: PreParseState,
+        next: &RuleType<Cx>,
+    ) -> RuleParseResult<()>
+    where
+        Self: Sized,
+    {
+        if cx.prefer_continue() {
+            Either::<C, B>::pre_parse(cx, state, next)
+        } else {
+            Either::<B, C>::pre_parse(cx, state, next)
+        }
+    }
+
+    fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
+    where
+        Self: Sized,
+    {
+        Ok(if cx.prefer_continue() {
+            match Either::<C, B>::parse(cx, next)? {
+                Either::Left(x) => Continue(x),
+                Either::Right(x) => Break(x),
+            }
+        } else {
+            match Either::<B, C>::parse(cx, next)? {
+                Either::Left(x) => Break(x),
+                Either::Right(x) => Continue(x),
+            }
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct ListNode<T> {
     value: Option<T>,
 }
 
 impl<T: Rule> TransformRule for ListNode<T> {
-    type Inner = Either<Empty, Partial<T, Either<Empty, ListNode<T>>>>;
+    type Inner = ControlFlow<(), Partial<T, ControlFlow<(), ListNode<T>>>>;
 
     fn print_name(f: &mut Formatter) -> fmt::Result {
         f.write_str("ListNodePlaceholder(")?;
@@ -1222,8 +1262,8 @@ impl<T: Rule> TransformRule for ListNode<T> {
     fn from_inner(inner: Self::Inner) -> Self {
         Self {
             value: match inner {
-                Either::Left(Empty) => None,
-                Either::Right(Partial { value, .. }) => Some(value),
+                Break(()) => None,
+                Continue(Partial { value, .. }) => Some(value),
             },
         }
     }
@@ -1311,12 +1351,12 @@ struct DelimitedListTailTrailing<T, Delim> {
 }
 
 impl<T: Rule, Delim: Rule> TransformRule for DelimitedListTailTrailing<T, Delim> {
-    type Inner = Either<Empty, (Discard<Delim>, Either<Empty, Partial<T, Self>>)>;
+    type Inner = ControlFlow<(), (Discard<Delim>, ControlFlow<(), Partial<T, Self>>)>;
 
     fn from_inner(inner: Self::Inner) -> Self {
         let value = match inner {
-            Either::Right((_, Either::Right(Partial { value, .. }))) => Some(value),
-            Either::Left(Empty) | Either::Right((_, Either::Left(Empty))) => None,
+            Continue((_, Continue(Partial { value, .. }))) => Some(value),
+            Break(()) | Continue((_, Break(()))) => None,
         };
 
         Self {
@@ -1328,25 +1368,21 @@ impl<T: Rule, Delim: Rule> TransformRule for DelimitedListTailTrailing<T, Delim>
 
 type DelimitedListTail<T, Delim> = ListNode<(Discard<Delim>, T)>;
 
-#[derive(Debug)]
-pub struct DelimitedList<T, Delim, const TRAIL: bool = true> {
-    pub items: Vec<T>,
-    _delim: PhantomData<Delim>,
-}
+pub type DelimitedList<T, Delim, const TRAIL: bool = true> =
+    TransformList<T, identity, Delim, TRAIL>;
 
-impl<T, Delim, const TRAIL: bool> DelimitedList<T, Delim, TRAIL> {
-    pub fn new(items: Vec<T>) -> Self {
-        Self {
-            items,
-            _delim: PhantomData,
-        }
-    }
-}
-
-impl<T: Rule, Delim: Rule, const TRAIL: bool> Rule for DelimitedList<T, Delim, TRAIL> {
+impl<Out, In, X, Delim, const TRAIL: bool, const PREFER_SHORT: bool> Rule
+    for TransformList<Out, X, Delim, TRAIL, PREFER_SHORT>
+where
+    Out: Rule,
+    In: Rule,
+    X: TransformInto<Out, Input = In> + 'static,
+    Delim: Rule,
+{
     fn print_name(f: &mut Formatter) -> fmt::Result {
-        f.debug_struct("DelimitedList")
-            .field("T", &DebugFn(T::print_name))
+        f.debug_struct("List")
+            .field("In", &DebugFn(In::print_name))
+            .field("Out", &DebugFn(Out::print_name))
             .field("Delim", &DebugFn(Delim::print_name))
             .finish()
     }
@@ -1364,9 +1400,9 @@ impl<T: Rule, Delim: Rule, const TRAIL: bool> Rule for DelimitedList<T, Delim, T
         Self: Sized,
     {
         if TRAIL {
-            DelimitedListPrototype::<T, Delim, Option<Delim>>::pre_parse(cx, state, next)
+            DelimitedListPrototype::<Out, Delim, Option<Delim>>::pre_parse(cx, state, next)
         } else {
-            DelimitedListPrototype::<T, Delim, Empty>::pre_parse(cx, state, next)
+            DelimitedListPrototype::<Out, Delim, Empty>::pre_parse(cx, state, next)
         }
     }
 
@@ -1374,42 +1410,51 @@ impl<T: Rule, Delim: Rule, const TRAIL: bool> Rule for DelimitedList<T, Delim, T
     where
         Self: Sized,
     {
+        cx = cx.update(ParseContextUpdate {
+            prefer_continue: Some(!PREFER_SHORT),
+            ..default()
+        });
         let mut out = Vec::new();
         let discard = cx.should_discard();
 
         if TRAIL {
-            let Some(Partial { value: first, .. }) = Option::<
-                Partial<T, DelimitedListTailTrailing<T, Delim>>,
+            let Continue(Partial { value: first, .. }) = ControlFlow::<
+                (),
+                Partial<In, DelimitedListTailTrailing<In, Delim>>,
             >::parse(cx.by_ref(), next)?
             else {
                 return Ok(Self::new(out));
             };
 
             if !discard {
-                out.push(first);
+                out.push(X::transform(first));
             }
 
             while let Some(item) =
-                DelimitedListTailTrailing::<T, Delim>::parse(cx.by_ref(), next)?.value
+                DelimitedListTailTrailing::<In, Delim>::parse(cx.by_ref(), next)?.value
             {
                 if !discard {
-                    out.push(item);
+                    out.push(X::transform(item));
                 }
             }
         } else {
-            let Some(Partial { value: first, .. }) =
-                Option::<Partial<T, DelimitedListTail<T, Delim>>>::parse(cx.by_ref(), next)?
+            let Continue(Partial { value: first, .. }) = ControlFlow::<
+                (),
+                Partial<In, DelimitedListTail<In, Delim>>,
+            >::parse(cx.by_ref(), next)?
             else {
                 return Ok(Self::new(out));
             };
 
             if !discard {
-                out.push(first);
+                out.push(X::transform(first));
             }
 
-            while let Some((_, item)) = DelimitedListTail::<T, Delim>::parse(cx.by_ref(), next)?.value {
+            while let Some((_, item)) =
+                DelimitedListTail::<In, Delim>::parse(cx.by_ref(), next)?.value
+            {
                 if !discard {
-                    out.push(item);
+                    out.push(X::transform(item));
                 }
             }
         }

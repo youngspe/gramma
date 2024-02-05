@@ -1,6 +1,6 @@
 #![allow(non_camel_case_types)]
 
-use std::marker::PhantomData;
+use std::{io::Empty, marker::PhantomData};
 
 use crate::Rule;
 
@@ -23,8 +23,8 @@ impl<T> TransformInto<T> for identity {
 }
 
 pub struct compose<A, B> {
-    a: A,
-    b: B,
+    _a: A,
+    _b: B,
 }
 
 impl<A, B, Out> TransformInto<Out> for compose<A, B>
@@ -47,6 +47,16 @@ impl<T: Rule, Delim: Rule, const TRAIL: bool> TransformInto<Vec<T>> for delimite
 
     fn transform(input: Self::Input) -> Vec<T> {
         input.items
+    }
+}
+
+impl<T: Rule, X: TransformInto<T>, Delim: Rule, const TRAIL: bool>
+    TransformInto<TransformList<T, X, Delim>> for delimited<Delim, TRAIL>
+{
+    type Input = TransformList<T, X, Delim, TRAIL>;
+
+    fn transform(input: Self::Input) -> TransformList<T, X, Delim> {
+        TransformList::new(input.items)
     }
 }
 
@@ -111,6 +121,52 @@ impl<In: Rule, Out, X: TransformInto<Out, Input = In>> TransformInto<Vec<Out>> f
 
     fn transform(input: Self::Input) -> Vec<Out> {
         input.items
+    }
+}
+
+impl<
+        In: Rule,
+        Out,
+        In1: Rule,
+        X: TransformInto<In1, Input = In>,
+        X1: TransformInto<Out, Input = In1>,
+        Delim: Rule,
+        const TRAIL: bool,
+        const PREFER_SHORT: bool,
+    > TransformInto<TransformList<Out, X1, Delim, TRAIL, PREFER_SHORT>> for for_each<X>
+{
+    type Input = TransformList<Out, compose<X, X1>, Delim, TRAIL, PREFER_SHORT>;
+
+    fn transform(input: Self::Input) -> TransformList<Out, X1, Delim, TRAIL, PREFER_SHORT> {
+        TransformList::new(input.items)
+    }
+}
+
+#[non_exhaustive]
+pub struct prefer_short<const PREFER_SHORT: bool = true> {}
+
+impl<T: Rule, const PREFER_SHORT: bool> TransformInto<Vec<T>> for prefer_short<PREFER_SHORT> {
+    type Input = TransformList<T, identity, Empty, false, PREFER_SHORT>;
+
+    fn transform(input: Self::Input) -> Vec<T> {
+        input.items
+    }
+}
+
+impl<
+        T: Rule,
+        X: TransformInto<T>,
+        Delim: Rule,
+        const TRAIL: bool,
+        const PREFER_SHORT: bool,
+        const PREFER_SHORT1: bool,
+    > TransformInto<TransformList<T, X, Delim, TRAIL, PREFER_SHORT1>>
+    for prefer_short<PREFER_SHORT>
+{
+    type Input = TransformList<T, X, Delim, TRAIL, PREFER_SHORT>;
+
+    fn transform(input: Self::Input) -> TransformList<T, X, Delim, TRAIL, PREFER_SHORT1> {
+        TransformList::new(input.items)
     }
 }
 

@@ -143,6 +143,7 @@ pub struct ParseContext<'src, 'cx, Cx: CxType> {
     location: &'cx mut Location,
     look_ahead: &'cx mut TokenBuf<Cx::LookAhead>,
     discard: bool,
+    prefer_continue: bool,
     cx_type: Cx,
     _cx_type: PhantomData<&'cx Cx>,
 }
@@ -154,6 +155,7 @@ pub struct ParseContextUpdate<'src, 'cx, Cx: CxType> {
     pub location: Option<&'cx mut Location>,
     pub error: Option<&'cx mut ParseError<'static>>,
     pub look_ahead: Option<&'cx mut TokenBuf<Cx::LookAhead>>,
+    pub prefer_continue: Option<bool>,
     pub discard: Option<bool>,
 }
 
@@ -164,6 +166,7 @@ impl<Cx: CxType> Default for ParseContextUpdate<'_, '_, Cx> {
             location: None,
             error: None,
             look_ahead: None,
+            prefer_continue: None,
             discard: None,
         }
     }
@@ -186,6 +189,7 @@ impl<'src, const LA: usize> SizedParseContext<'src, 'static, LA> {
             location: &mut Location { position: 0 },
             discard: false,
             look_ahead: &mut default(),
+            prefer_continue: true,
             cx_type,
             _cx_type: PhantomData,
         });
@@ -202,6 +206,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
             location,
             discard,
             look_ahead,
+            prefer_continue,
             cx_type,
             ..
         } = self;
@@ -211,6 +216,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
             location,
             discard: *discard,
             look_ahead,
+            prefer_continue: *prefer_continue,
             cx_type: cx_type.child(),
             _cx_type: PhantomData,
         }
@@ -218,6 +224,10 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
 
     pub fn should_discard(&self) -> bool {
         self.discard
+    }
+
+    pub fn prefer_continue(&self) -> bool {
+        self.prefer_continue
     }
 
     pub fn update<'src2, 'cx2>(
@@ -234,6 +244,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
             error,
             look_ahead,
             discard,
+            prefer_continue,
         } = update;
 
         ParseContext {
@@ -242,6 +253,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
             location: location.unwrap_or(self.location),
             look_ahead: look_ahead.unwrap_or(self.look_ahead),
             discard: discard.unwrap_or(self.discard),
+            prefer_continue: prefer_continue.unwrap_or(self.prefer_continue),
             ..self
         }
     }
