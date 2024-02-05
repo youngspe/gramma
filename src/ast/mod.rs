@@ -145,7 +145,7 @@ impl<'lt, Cx: CxType> RuleType<'lt, Cx> {
 
     #[inline]
     pub fn pre_parse(&self, cx: ParseContext<Cx>, state: PreParseState) -> RuleParseResult<()> {
-        if state.dist > cx.look_ahead().len() {
+        if state.dist >= cx.look_ahead().len() {
             return Ok(());
         }
         (self.pre_parse)(cx, state, self.next.unwrap_or_default())
