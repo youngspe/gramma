@@ -1128,6 +1128,18 @@ impl Rule for LocationRange {
         cx.set_location(end);
         Ok(Self { start, end })
     }
+
+    fn print_tree(&self, cx: &PrintContext, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}..{} => {:?}",
+            self.start.position,
+            self.end.position,
+            cx.src()
+                .get(self.start.position..self.end.position)
+                .unwrap_or_default()
+        )
+    }
 }
 
 generic_unit!(
