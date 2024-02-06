@@ -1,4 +1,4 @@
-use std::{
+use core::{
     cmp::Ordering,
     fmt::Debug,
     hash::Hash,
@@ -11,6 +11,7 @@ use regex::Regex;
 
 use crate::{
     ast::{PreParseState, RuleParseResult, RuleType},
+    internal_prelude::*,
     token::{AnyToken, TokenType},
     utils::default,
     Rule,

@@ -1,10 +1,12 @@
 #![allow(non_camel_case_types)]
 
-use std::{io::Empty, marker::PhantomData};
+use core::marker::PhantomData;
 
-use crate::Rule;
+use crate::{internal_prelude::*, Rule};
 
-use super::{CompoundToken, DelimitedList, Discard, DualParse, Ignore, NotParse, TransformList};
+use super::{
+    CompoundToken, DelimitedList, Discard, DualParse, Empty, Ignore, NotParse, TransformList,
+};
 
 pub trait TransformInto<Out> {
     type Input;

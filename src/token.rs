@@ -1,4 +1,4 @@
-use std::{
+use core::{
     any::{Any, TypeId},
     cmp::Ordering,
     fmt::{self, Debug, Formatter},
@@ -49,7 +49,7 @@ pub struct TokenType {
 }
 
 impl Debug for TokenType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
     }
 }
@@ -75,7 +75,7 @@ impl Ord for TokenType {
 impl Eq for TokenType {}
 
 impl core::hash::Hash for TokenType {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.token_id().hash(state);
     }
 }
@@ -134,8 +134,8 @@ impl TransformRule for Eof {
 macro_rules! _define_token {
     (@try_lex $Name:ident (regex = $pattern:literal $(, capture = $cap:literal)? $(,)?)) => {
         fn try_lex(src: &str, location: $crate::parse::Location) -> Option<$crate::parse::LocationRange> {
-            $crate::lazy_static! {
-                static ref PATTERN: $crate::Regex = $crate::Regex::new(::core::concat!(r"\A", $pattern)).unwrap();
+            $crate::_lazy_regex! {
+                static ref PATTERN => ::core::concat!(r"\A", $pattern);
             }
             $crate::parse::lex_regex(&PATTERN, 0 $(+ $cap)?, src, location)
         }

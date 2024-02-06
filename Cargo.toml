@@ -5,7 +5,20 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[dependencies]
-either = "1.9.0"
-lazy_static = "1.4.0"
-regex = "1.10.3"
+[dependencies.either]
+version = "1.9.0"
+default-features = false
+
+[dependencies.once_cell]
+version = "1.19.0"
+default-features = false
+features = ["critical-section"]
+
+[dependencies.regex]
+version = "1.10.3"
+default-features = false
+features = ["perf", "unicode"]
+
+[features]
+default = ["std"]
+std = ["regex/std", "once_cell/std"]

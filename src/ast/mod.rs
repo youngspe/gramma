@@ -2,7 +2,7 @@ mod macros;
 pub mod print;
 pub mod transform;
 
-use std::{
+use core::{
     any::{Any, TypeId},
     cmp::Ordering,
     fmt::{self, Debug, Formatter},
@@ -12,9 +12,9 @@ use std::{
 };
 
 use either::{for_both, Either};
-use regex::Regex;
 
 use crate::{
+    internal_prelude::*,
     parse::{
         CxType, Location, LocationRange, ParseContext, ParseContextParts, ParseContextUpdate,
         ParseError, SizedParseContext,
@@ -617,7 +617,7 @@ impl<T> Clone for Token<T> {
 }
 
 impl<T: TokenDef> Debug for Token<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(T::name())
     }
 }
@@ -785,7 +785,7 @@ macro_rules! generic_unit {
             }
         }
         impl<$($T: ?Sized),*> Hash for $Name<$($T),*> {
-            fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+            fn hash<H: core::hash::Hasher>(&self, _: &mut H) {}
         }
     )*};
 }
@@ -1575,8 +1575,8 @@ pub fn extract_actual<'src>(src: &'src str, start: usize) -> &'src str {
         return "<end-of-file>";
     }
 
-    lazy_static::lazy_static! {
-        static ref PSEUDO_TOKEN: Regex = Regex::new(r"\A.+?\b|.").unwrap();
+    crate::_lazy_regex! {
+        static ref PSEUDO_TOKEN => r"\A.+?\b|.";
     }
 
     const MAX_LEN: usize = 32;

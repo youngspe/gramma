@@ -1,5 +1,5 @@
 use core::fmt;
-use std::ops::ControlFlow::{self, Break, Continue};
+use core::ops::ControlFlow::{self, Break, Continue};
 
 pub(crate) fn default<T: Default>() -> T {
     T::default()
