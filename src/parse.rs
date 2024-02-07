@@ -3,7 +3,7 @@ use core::{
     fmt::Debug,
     hash::Hash,
     marker::PhantomData,
-    ops::{Add, AddAssign, Deref, DerefMut, Index, IndexMut, Range},
+    ops::{Add, AddAssign, Deref, DerefMut, Index, IndexMut, Range, Sub, SubAssign},
     slice::SliceIndex,
 };
 
@@ -54,6 +54,7 @@ impl LocationRange {
         }
     }
 }
+
 impl Add<usize> for Location {
     type Output = Self;
 
@@ -82,6 +83,37 @@ impl AddAssign<usize> for LocationRange {
     fn add_assign(&mut self, rhs: usize) {
         self.start += rhs;
         self.end += rhs;
+    }
+}
+
+impl Sub<usize> for Location {
+    type Output = Self;
+
+    fn sub(mut self, rhs: usize) -> Self::Output {
+        self -= rhs;
+        self
+    }
+}
+
+impl SubAssign<usize> for Location {
+    fn sub_assign(&mut self, rhs: usize) {
+        self.position -= rhs;
+    }
+}
+
+impl Sub<usize> for LocationRange {
+    type Output = Self;
+
+    fn sub(mut self, rhs: usize) -> Self::Output {
+        self -= rhs;
+        self
+    }
+}
+
+impl SubAssign<usize> for LocationRange {
+    fn sub_assign(&mut self, rhs: usize) {
+        self.start -= rhs;
+        self.end -= rhs;
     }
 }
 
