@@ -1,3 +1,4 @@
+#![doc = include_str!("../README.md")]
 #![no_std]
 extern crate alloc;
 extern crate either;
@@ -19,9 +20,9 @@ pub(crate) mod internal_prelude {
     pub use alloc::{boxed::Box, vec::Vec};
 }
 
-pub use ast::{parse_tree, Rule};
+pub use ast::{display_tree, parse_tree, Rule};
 pub use parse::ParseError;
-pub use token::TokenDef;
+pub use token::Token;
 
 #[doc(hidden)]
 #[macro_export]

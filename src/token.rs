@@ -6,12 +6,12 @@ use core::{
 };
 
 use crate::{
-    ast::{Discard, Token, TransformRule},
+    ast::{DelegateRule, Discard, ReadToken},
     parse::{CxType, Location, LocationRange},
     utils::simple_name,
 };
 
-pub trait TokenDef: Any {
+pub trait Token: Any {
     fn try_lex(src: &str, location: Location) -> Option<LocationRange>;
 
     fn name() -> &'static str {
@@ -38,50 +38,52 @@ pub trait TokenDef: Any {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AnyToken {
-    pub token_type: &'static TokenType,
+    pub token_type: TokenType,
     pub range: LocationRange,
 }
 
-pub struct TokenType {
+pub struct TokenObject {
     name: fn() -> &'static str,
     token_id: fn() -> TypeId,
     try_lex: fn(&str, Location) -> Option<LocationRange>,
 }
 
-impl Debug for TokenType {
+pub type TokenType = &'static TokenObject;
+
+impl Debug for TokenObject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
     }
 }
 
-impl PartialEq for TokenType {
+impl PartialEq for TokenObject {
     fn eq(&self, other: &Self) -> bool {
         ptr::eq(self, other) || self.token_id() == other.token_id()
     }
 }
 
-impl PartialOrd for TokenType {
+impl PartialOrd for TokenObject {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for TokenType {
+impl Ord for TokenObject {
     fn cmp(&self, other: &Self) -> Ordering {
         self.token_id().cmp(&other.token_id())
     }
 }
 
-impl Eq for TokenType {}
+impl Eq for TokenObject {}
 
-impl core::hash::Hash for TokenType {
+impl core::hash::Hash for TokenObject {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.token_id().hash(state);
     }
 }
 
-impl TokenType {
-    pub const fn of<T: TokenDef>() -> &'static Self {
+impl TokenObject {
+    pub const fn of<T: Token>() -> &'static Self {
         &Self {
             name: T::name,
             token_id: TypeId::of::<T>,
@@ -108,7 +110,7 @@ impl TokenType {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Eof;
 
-impl TokenDef for Eof {
+impl Token for Eof {
     fn try_lex(src: &str, location: Location) -> Option<LocationRange> {
         (location.position >= src.len()).then_some(LocationRange {
             start: location,
@@ -121,8 +123,8 @@ impl TokenDef for Eof {
     }
 }
 
-impl TransformRule for Eof {
-    type Inner = Discard<Token<Eof>>;
+impl DelegateRule for Eof {
+    type Inner = Discard<ReadToken<Eof>>;
 
     fn from_inner(_: Self::Inner) -> Self {
         Self
@@ -172,8 +174,8 @@ macro_rules! _define_token {
         }
     };
     (@impl_rule $Name:ident ($Ty:ty)) => {
-        impl $crate::ast::TransformRule for $name {
-            type Inner = $crate::ast::DualParse<$crate::ast::Discard<$crate::ast::Token<$Name>>, $Ty>>;
+        impl $crate::ast::DelegateRule for $name {
+            type Inner = $crate::ast::DualParse<$crate::ast::Discard<$crate::ast::ReadToken<$Name>>, $Ty>>;
 
             fn from_inner(inner: Self::Inner) -> Self {
                 Self(inner.inner)
@@ -181,14 +183,14 @@ macro_rules! _define_token {
         }
     };
     (@impl_rule $Name:ident) => {
-        impl $crate::ast::TransformRule for $Name {
-            type Inner = $crate::ast::Token<$Name>;
+        impl $crate::ast::DelegateRule for $Name {
+            type Inner = $crate::ast::ReadToken<$Name>;
 
             fn print_tree(&self, cx: &$crate::ast::print::PrintContext, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
                 if cx.is_debug() {
-                    <Self as $crate::token::TokenDef>::print_debug(cx.src(), self.range, f)
+                    <Self as $crate::token::Token>::print_debug(cx.src(), self.range, f)
                 } else {
-                    <Self as $crate::token::TokenDef>::print_display(cx.src(), self.range, f)
+                    <Self as $crate::token::Token>::print_display(cx.src(), self.range, f)
                 }
             }
 
@@ -223,7 +225,7 @@ macro_rules! _define_token {
             $vis struct $Name $(($Ty))?;
         }
 
-        impl $crate::token::TokenDef for $Name {
+        impl $crate::token::Token for $Name {
             $crate::_define_token! { @try_lex $Name $pattern }
 
             fn display_name() -> &'static str {

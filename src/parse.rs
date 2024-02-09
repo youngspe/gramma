@@ -10,7 +10,7 @@ use core::{
 use regex::Regex;
 
 use crate::{
-    ast::{PreParseState, RuleParseResult, RuleType},
+    ast::{PreParseState, RuleObject, RuleParseResult},
     internal_prelude::*,
     token::{AnyToken, TokenType},
     utils::default,
@@ -351,7 +351,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
         self.by_ref().into_parts()
     }
 
-    fn pre_parse_inner<'next, T: Rule>(self, next: Option<&RuleType<Cx>>) -> RuleParseResult<()>
+    fn pre_parse_inner<'next, T: Rule>(self, next: Option<&RuleObject<Cx>>) -> RuleParseResult<()>
     where
         Cx: 'next,
     {
@@ -375,7 +375,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
 
     pub fn pre_parse<'next, T: Rule>(
         &mut self,
-        next: impl Into<Option<&'next RuleType<'next, Cx>>> + 'next,
+        next: impl Into<Option<&'next RuleObject<'next, Cx>>> + 'next,
     ) -> RuleParseResult<()>
     where
         Cx: 'next,
@@ -393,7 +393,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
 
     pub fn record_error<'next, T: Rule>(
         &mut self,
-        next: impl Into<Option<&'next RuleType<'next, Cx>>> + 'next,
+        next: impl Into<Option<&'next RuleObject<'next, Cx>>> + 'next,
     ) -> RuleParseResult<()>
     where
         Cx: 'next,
@@ -404,7 +404,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
     pub(crate) fn isolated_parse<T: Rule>(
         &mut self,
         start: impl Into<Option<Location>>,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<(T, Location)> {
         let mut start = start.into().unwrap_or(*self.location);
 
@@ -499,11 +499,11 @@ impl<A: TokenBufData, S: SliceIndex<[Option<AnyToken>]>> IndexMut<S> for TokenBu
 pub struct ParseError<'src> {
     pub location: Location,
     pub actual: &'src str,
-    pub expected: Vec<&'static TokenType>,
+    pub expected: Vec<TokenType>,
 }
 
 impl ParseError<'_> {
-    pub fn add_expected(&mut self, location: Location, token_type: &'static TokenType) {
+    pub fn add_expected(&mut self, location: Location, token_type: TokenType) {
         match location.cmp(&self.location) {
             Ordering::Less => return,
             Ordering::Equal => {}
@@ -521,7 +521,7 @@ impl ParseError<'_> {
         self.expected.clear();
     }
 
-    pub fn expected(&self) -> impl Iterator<Item = &'static TokenType> + '_ {
+    pub fn expected(&self) -> impl Iterator<Item = TokenType> + '_ {
         self.expected.iter().copied()
     }
 }

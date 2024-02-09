@@ -266,7 +266,7 @@ macro_rules! _define_rule {
         const _: () = {
             use $crate::ast::transform::*;
 
-            impl $crate::ast::TransformRule for $Name {
+            impl $crate::ast::DelegateRule for $Name {
                 type Inner = $crate::_rule_field_input_types!(
                     $(#$attr)*
                     $crate::_rule_field_input_types!($( $(#$field_attr)* $Field,)*)
@@ -328,7 +328,7 @@ macro_rules! _define_rule {
         const _: () = {
             use $crate::ast::transform::*;
 
-            impl $crate::ast::TransformRule for $Name {
+            impl $crate::ast::DelegateRule for $Name {
                 type Inner = $crate::_rule_field_input_types!(
                     $(#$attr)*
                     $crate::_into_either_ty!($(

@@ -32,10 +32,6 @@ pub(crate) fn simple_name<T: ?Sized>() -> &'static str {
     name
 }
 
-pub(crate) fn run<R>(f: impl FnOnce() -> R) -> R {
-    f()
-}
-
 pub(crate) fn try_run<T, E>(f: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
     f()
 }
@@ -142,7 +138,6 @@ pub(crate) trait MapBreak: MyTry {
 }
 
 pub(crate) type WithContinue<T, C> = <<T as MyTry>::Kind as MyTryKind>::WithContinue<C>;
-pub(crate) type WithBreak<T, B> = <T as MapBreak>::WithBreak<B>;
 
 impl MyTryKind for Option<()> {
     type WithContinue<T> = Option<T>;

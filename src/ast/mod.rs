@@ -1,3 +1,4 @@
+///
 mod macros;
 pub mod print;
 pub mod transform;
@@ -19,7 +20,7 @@ use crate::{
         CxType, Location, LocationRange, ParseContext, ParseContextParts, ParseContextUpdate,
         ParseError, SizedParseContext,
     },
-    token::{AnyToken, Eof, TokenDef, TokenType},
+    token::{AnyToken, Eof, Token, TokenObject},
     utils::{default, simple_name, try_run, DebugFn, MyTry},
 };
 
@@ -28,9 +29,9 @@ use self::{
     transform::{identity, TransformInto},
 };
 
-pub struct WithSource<'src, T: ?Sized> {
-    pub src: &'src str,
-    pub ast: T,
+struct WithSource<'data, T: ?Sized> {
+    pub src: &'data str,
+    pub ast: &'data T,
 }
 
 impl<T: Rule + ?Sized> Debug for WithSource<'_, T> {
@@ -46,6 +47,7 @@ impl<T: Rule + ?Sized> fmt::Display for WithSource<'_, T> {
     }
 }
 
+/// Values used to represent the current parser state in [Rule::pre_parse].
 #[non_exhaustive]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PreParseState {
@@ -54,17 +56,23 @@ pub struct PreParseState {
     pub dist: usize,
 }
 
+/// Represents part of a grammar.
+///
+/// See also [crate::define_rule].
 pub trait Rule: Any + Debug {
+    /// Determines whether the AST node should be printed.
     fn print_visibility(&self, cx: &PrintContext) -> PrintVisibility {
         let _ = cx;
         PrintVisibility::Always
     }
 
+    /// Writes the contents of the parsed AST node to `f`.
     fn print_tree(&self, cx: &PrintContext, f: &mut Formatter) -> fmt::Result {
         let _ = cx;
         Debug::fmt(self, f)
     }
 
+    /// The name of the rule.
     fn name() -> &'static str
     where
         Self: Sized,
@@ -72,6 +80,7 @@ pub trait Rule: Any + Debug {
         simple_name::<Self>()
     }
 
+    /// Writes the name of this rule to `f`.
     fn print_name(f: &mut Formatter) -> fmt::Result
     where
         Self: Sized,
@@ -79,70 +88,60 @@ pub trait Rule: Any + Debug {
         f.write_str(Self::name())
     }
 
+    /// Begins evaluating this rule, stopping when the lookahead buffer is full.
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized;
 
-    fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
+    /// Evaluates the rule.
+    ///
+    /// Returns `Ok(Self)` if successful, or `Err(_)` if the source does not match this rule.
+    fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized;
-
-    fn matches_empty() -> bool
-    where
-        Self: Sized,
-    {
-        true
-    }
 }
 
+/// An object dynamically representing an implementation of [Rule].
 #[derive(Clone, Copy)]
-pub struct RuleType<'lt, Cx: CxType> {
+pub struct RuleObject<'lt, Cx: CxType> {
     name: fn() -> &'static str,
     print_name: fn(&mut Formatter) -> fmt::Result,
-    node_id: fn() -> TypeId,
-    pre_parse: fn(ParseContext<Cx>, PreParseState, &RuleType<Cx>) -> RuleParseResult<()>,
+    pre_parse: fn(ParseContext<Cx>, PreParseState, &RuleObject<Cx>) -> RuleParseResult<()>,
     next: Option<&'lt Self>,
 }
 
-impl<'lt, Cx: CxType> RuleType<'lt, Cx> {
+impl<'lt, Cx: CxType> RuleObject<'lt, Cx> {
+    /// Creates a [RuleObject] for rule `T`, which may be followed by another [RuleObject] `next`.
     pub fn new<T: Rule>(next: impl Into<Option<&'lt Self>>) -> Self {
-        RuleType {
+        RuleObject {
             name: T::name,
             print_name: T::print_name,
-            node_id: TypeId::of::<T>,
             pre_parse: T::pre_parse::<Cx>,
             next: next.into(),
         }
     }
 
+    /// Creates an unbounded reference to a [RuleObject] for `T`.
     pub const fn of<T: Rule>() -> &'lt Self {
-        &RuleType::<Cx> {
+        &RuleObject::<Cx> {
             name: T::name,
             print_name: T::print_name,
-            node_id: TypeId::of::<T>,
             pre_parse: T::pre_parse,
             next: None,
         }
     }
 
-    pub fn new_repeating<T: Rule>(next: impl Into<Option<&'lt Self>>) -> Self {
-        Self::new::<ListNode<T>>(next)
-    }
-
+    /// The name of the rule.
     #[inline]
     pub fn name(&self) -> &str {
         (self.name)()
     }
 
-    #[inline]
-    pub fn node_id(&self) -> TypeId {
-        (self.node_id)()
-    }
-
+    /// Begins evaluating this rule, stopping when the lookahead buffer is full.
     #[inline]
     pub fn pre_parse(&self, cx: ParseContext<Cx>, state: PreParseState) -> RuleParseResult<()> {
         if state.dist >= cx.look_ahead().len() {
@@ -152,7 +151,7 @@ impl<'lt, Cx: CxType> RuleType<'lt, Cx> {
     }
 }
 
-impl<Cx: CxType> Debug for RuleType<'_, Cx> {
+impl<Cx: CxType> Debug for RuleObject<'_, Cx> {
     fn fmt(mut self: &Self, f: &mut Formatter<'_>) -> fmt::Result {
         let mut list = f.debug_list();
 
@@ -167,18 +166,19 @@ impl<Cx: CxType> Debug for RuleType<'_, Cx> {
     }
 }
 
-impl<Cx: CxType> Default for RuleType<'_, Cx> {
+impl<Cx: CxType> Default for RuleObject<'_, Cx> {
     fn default() -> Self {
         Self::new::<Accept>(None)
     }
 }
 
-impl<'lt, Cx: CxType> Default for &'lt RuleType<'lt, Cx> {
+impl<'lt, Cx: CxType> Default for &'lt RuleObject<'lt, Cx> {
     fn default() -> Self {
-        RuleType::of::<Accept>()
+        RuleObject::of::<Accept>()
     }
 }
 
+/// A rule that rejects all possible source strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Reject {}
 
@@ -186,14 +186,14 @@ impl Rule for Reject {
     fn pre_parse<Cx: CxType>(
         _: ParseContext<Cx>,
         state: PreParseState,
-        _: &RuleType<Cx>,
+        _: &RuleObject<Cx>,
     ) -> RuleParseResult<()> {
         Err(RuleParseFailed {
             location: state.start,
         })
     }
 
-    fn parse<Cx: CxType>(cx: ParseContext<Cx>, _: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(cx: ParseContext<Cx>, _: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
@@ -201,35 +201,39 @@ impl Rule for Reject {
             location: cx.location(),
         })
     }
-
-    fn matches_empty() -> bool {
-        false
-    }
 }
 
-pub trait TransformRule: Any + Debug {
+/// A helper trait for implementing [Rule] based on another rule.
+pub trait DelegateRule: Any + Debug {
+    /// The rule to parse.
     type Inner: Rule;
 
+    /// See [Rule::print_name].
     fn print_name(f: &mut Formatter) -> fmt::Result {
         f.write_str(Self::name())
     }
 
+    /// See [Rule::print_visibility]
     fn print_visibility(&self, cx: &PrintContext) -> PrintVisibility {
         let _ = cx;
         PrintVisibility::Always
     }
 
+    /// Transforms `Self::Inner` into `Self` after successfully parsing `Self::Inner`.
     fn from_inner(inner: Self::Inner) -> Self;
 
+    /// See [Rule::print_tree]
     fn print_tree(&self, cx: &PrintContext, f: &mut Formatter) -> fmt::Result {
         let _ = cx;
         Debug::fmt(self, f)
     }
 
+    /// See [Rule::name]
     fn name() -> &'static str {
         simple_name::<Self>()
     }
 
+    /// Optionally performs operations on the [ParseContext] before parsing `Self::Inner`.
     fn update_context<Cx: CxType, R>(
         cx: ParseContext<Cx>,
         f: impl FnOnce(ParseContext<Cx>) -> R,
@@ -240,45 +244,39 @@ pub trait TransformRule: Any + Debug {
 
 impl<This> Rule for This
 where
-    This: TransformRule,
+    This: DelegateRule,
 {
     fn print_name(f: &mut Formatter) -> fmt::Result {
-        <This as TransformRule>::print_name(f)
+        <This as DelegateRule>::print_name(f)
     }
     fn name() -> &'static str {
-        <This as TransformRule>::name()
+        <This as DelegateRule>::name()
     }
     fn print_visibility(&self, cx: &PrintContext) -> PrintVisibility {
-        TransformRule::print_visibility(self, cx)
+        DelegateRule::print_visibility(self, cx)
     }
 
     fn print_tree(&self, cx: &PrintContext, f: &mut Formatter) -> fmt::Result {
-        TransformRule::print_tree(self, cx, f)
+        DelegateRule::print_tree(self, cx, f)
     }
 
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()> {
         Self::update_context(cx, |cx| This::Inner::pre_parse(cx, state, next))
     }
 
-    fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
         Self::update_context(cx, |cx| This::Inner::parse(cx, next).map(This::from_inner))
     }
-
-    fn matches_empty() -> bool
-    where
-        Self: Sized,
-    {
-        This::Inner::matches_empty()
-    }
 }
 
+/// Base [Rule] implementation for [Vec].
 pub struct TransformList<
     T,
     X: TransformInto<T>,
@@ -311,7 +309,7 @@ impl<T: Debug, X: TransformInto<T>, Delim, const TRAIL: bool, const PREFER_SHORT
     }
 }
 
-impl<T: Rule> TransformRule for Vec<T> {
+impl<T: Rule> DelegateRule for Vec<T> {
     type Inner = TransformList<T, identity>;
     fn print_name(f: &mut Formatter) -> fmt::Result {
         f.write_str("Vec(")?;
@@ -328,6 +326,7 @@ impl<T: Rule> TransformRule for Vec<T> {
     }
 }
 
+/// Rule that reads zero tokens and accepts. Equivalent to using `()`.
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Empty;
 
@@ -335,24 +334,20 @@ impl Rule for Empty {
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()> {
         next.pre_parse(cx, state)
     }
 
-    fn parse<Cx: CxType>(_: ParseContext<Cx>, _: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(_: ParseContext<Cx>, _: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
         Ok(Self)
     }
-
-    fn matches_empty() -> bool {
-        true
-    }
 }
 
-impl<T: Rule> TransformRule for Option<T> {
+impl<T: Rule> DelegateRule for Option<T> {
     fn print_name(f: &mut Formatter) -> fmt::Result {
         f.write_str("(")?;
         T::print_name(f)?;
@@ -386,7 +381,7 @@ impl<T: Rule> TransformRule for Option<T> {
     }
 }
 
-impl<T: Rule> TransformRule for Box<T> {
+impl<T: Rule> DelegateRule for Box<T> {
     type Inner = T;
 
     fn print_tree(&self, cx: &PrintContext, f: &mut Formatter) -> fmt::Result {
@@ -398,6 +393,7 @@ impl<T: Rule> TransformRule for Box<T> {
     }
 }
 
+/// Simple error type indicating where parsing failed.
 #[derive(Debug)]
 pub struct RuleParseFailed {
     pub location: Location,
@@ -421,14 +417,6 @@ impl<T: Rule, U: Rule> Rule for Either<T, U> {
         U::print_name(f)?;
         f.write_str(")")
     }
-
-    fn matches_empty() -> bool
-    where
-        Self: Sized,
-    {
-        T::matches_empty() || U::matches_empty()
-    }
-
     fn print_visibility(&self, cx: &PrintContext) -> PrintVisibility {
         for_both!(self, ast => ast.print_visibility(cx))
     }
@@ -439,12 +427,12 @@ impl<T: Rule, U: Rule> Rule for Either<T, U> {
     fn pre_parse<Cx: CxType>(
         mut cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()> {
         T::pre_parse(cx.by_ref(), state, next).or_else(|_| U::pre_parse(cx, state, next))
     }
 
-    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
@@ -486,30 +474,23 @@ impl<T: Rule, U: Rule> Rule for (T, U) {
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()> {
-        T::pre_parse(cx, state, &RuleType::new::<U>(next))
+        T::pre_parse(cx, state, &RuleObject::new::<U>(next))
     }
 
-    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
         Ok((
-            T::parse(cx.by_ref(), &RuleType::new::<U>(next))?,
+            T::parse(cx.by_ref(), &RuleObject::new::<U>(next))?,
             U::parse(cx, next)?,
         ))
     }
-
-    fn matches_empty() -> bool
-    where
-        Self: Sized,
-    {
-        T::matches_empty() && U::matches_empty()
-    }
 }
 
-impl TransformRule for () {
+impl DelegateRule for () {
     type Inner = Empty;
 
     fn print_name(f: &mut Formatter) -> fmt::Result {
@@ -525,7 +506,7 @@ impl TransformRule for () {
     }
 }
 
-impl<T0: Rule> TransformRule for (T0,) {
+impl<T0: Rule> DelegateRule for (T0,) {
     type Inner = T0;
 
     fn print_name(f: &mut Formatter) -> fmt::Result {
@@ -545,7 +526,7 @@ impl<T0: Rule> TransformRule for (T0,) {
     }
 }
 
-impl<T0: Rule, T1: Rule, T2: Rule> TransformRule for (T0, T1, T2) {
+impl<T0: Rule, T1: Rule, T2: Rule> DelegateRule for (T0, T1, T2) {
     type Inner = (T0, (T1, T2));
 
     fn print_name(f: &mut Formatter) -> fmt::Result {
@@ -572,7 +553,7 @@ impl<T0: Rule, T1: Rule, T2: Rule> TransformRule for (T0, T1, T2) {
     }
 }
 
-impl<T0: Rule, T1: Rule, T2: Rule, T3: Rule> TransformRule for (T0, T1, T2, T3) {
+impl<T0: Rule, T1: Rule, T2: Rule, T3: Rule> DelegateRule for (T0, T1, T2, T3) {
     type Inner = ((T0, T1), (T2, T3));
 
     fn print_name(f: &mut Formatter) -> fmt::Result {
@@ -602,36 +583,37 @@ impl<T0: Rule, T1: Rule, T2: Rule, T3: Rule> TransformRule for (T0, T1, T2, T3) 
     }
 }
 
+/// Rule that reads exactly one token of type `T`.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Token<T> {
+pub struct ReadToken<T> {
     pub range: LocationRange,
     _t: PhantomData<T>,
 }
 
-impl<T> Copy for Token<T> {}
+impl<T> Copy for ReadToken<T> {}
 
-impl<T> Clone for Token<T> {
+impl<T> Clone for ReadToken<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T: TokenDef> Debug for Token<T> {
+impl<T: Token> Debug for ReadToken<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(T::name())
     }
 }
 
-impl<T: TokenDef> From<Token<T>> for AnyToken {
-    fn from(value: Token<T>) -> Self {
+impl<T: Token> From<ReadToken<T>> for AnyToken {
+    fn from(value: ReadToken<T>) -> Self {
         Self {
-            token_type: TokenType::of::<T>(),
+            token_type: TokenObject::of::<T>(),
             range: value.range,
         }
     }
 }
 
-impl<T> From<LocationRange> for Token<T> {
+impl<T> From<LocationRange> for ReadToken<T> {
     fn from(range: LocationRange) -> Self {
         Self {
             range,
@@ -640,7 +622,7 @@ impl<T> From<LocationRange> for Token<T> {
     }
 }
 
-impl<T: TokenDef> Rule for Token<T> {
+impl<T: Token> Rule for ReadToken<T> {
     fn print_name(f: &mut Formatter) -> fmt::Result
     where
         Self: Sized,
@@ -655,15 +637,10 @@ impl<T: TokenDef> Rule for Token<T> {
             T::print_display(cx.src(), self.range, f)
         }
     }
-
-    fn matches_empty() -> bool {
-        false
-    }
-
     fn pre_parse<Cx: CxType>(
         mut cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()> {
         if state.start > state.end {
             return Ok(());
@@ -681,13 +658,13 @@ impl<T: TokenDef> Rule for Token<T> {
             Some([token, ..]) => {
                 let Some(range) = T::try_lex(src, state.start) else {
                     cx.error_mut()
-                        .add_expected(state.start, TokenType::of::<T>());
+                        .add_expected(state.start, TokenObject::of::<T>());
                     return Err(RuleParseFailed {
                         location: state.start,
                     });
                 };
                 *token = Some(AnyToken {
-                    token_type: TokenType::of::<T>(),
+                    token_type: TokenObject::of::<T>(),
                     range,
                 });
                 range.end
@@ -704,7 +681,7 @@ impl<T: TokenDef> Rule for Token<T> {
         )
     }
 
-    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, _: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, _: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
@@ -726,13 +703,13 @@ impl<T: TokenDef> Rule for Token<T> {
         })
         .break_also(|err| {
             cx.error_mut()
-                .add_expected(err.location, TokenType::of::<T>())
+                .add_expected(err.location, TokenObject::of::<T>())
         })
     }
 }
 
-impl<T: Rule> TransformRule for PhantomData<T> {
-    type Inner = T;
+impl<T: Rule> DelegateRule for PhantomData<T> {
+    type Inner = Discard<T>;
 
     fn print_visibility(&self, _: &PrintContext) -> PrintVisibility {
         PrintVisibility::Never
@@ -744,7 +721,8 @@ impl<T: Rule> TransformRule for PhantomData<T> {
 }
 
 macro_rules! generic_unit {
-    ($($vis:vis struct $Name:ident<$($T:ident),* $(,)?>;)*) => {$(
+    ($($(#$attr:tt)*$vis:vis struct $Name:ident<$($T:ident),* $(,)?>;)*) => {$(
+        $(#$attr)*
         $vis struct $Name<$($T: ?Sized),*>($(PhantomData<$T>),*);
 
 
@@ -790,6 +768,7 @@ macro_rules! generic_unit {
     )*};
 }
 
+/// Rule that consumes the remaining source string and accepts regardless of its content.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Accept;
 
@@ -801,12 +780,12 @@ impl Rule for Accept {
     fn pre_parse<Cx: CxType>(
         _: ParseContext<Cx>,
         _: PreParseState,
-        _: &RuleType<Cx>,
+        _: &RuleObject<Cx>,
     ) -> RuleParseResult<()> {
         Ok(())
     }
 
-    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, _: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, _: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
@@ -815,13 +794,10 @@ impl Rule for Accept {
         });
         Ok(Self)
     }
-
-    fn matches_empty() -> bool {
-        // does match an empty string, but doesn't parse any tokens after this
-        false
-    }
 }
 
+/// Rule that is initially parsed as `Outer`.
+/// If `Outer` parses successfully, the string that matched `Outer` will be parsed again as `Inner`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DualParse<Outer, Inner> {
     pub outer: Outer,
@@ -862,7 +838,7 @@ impl<Outer: Rule, Inner: Rule> Rule for DualParse<Outer, Inner> {
     fn pre_parse<Cx: CxType>(
         mut cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
@@ -879,7 +855,7 @@ impl<Outer: Rule, Inner: Rule> Rule for DualParse<Outer, Inner> {
         )
     }
 
-    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
@@ -894,7 +870,7 @@ impl<Outer: Rule, Inner: Rule> Rule for DualParse<Outer, Inner> {
             look_ahead: Some(&mut default()),
             ..default()
         }) {
-            cx => <(Inner, Silent<Token<Eof>>)>::parse(cx, default())?,
+            cx => <(Inner, Silent<ReadToken<Eof>>)>::parse(cx, default())?,
         };
 
         if end > start {
@@ -905,6 +881,7 @@ impl<Outer: Rule, Inner: Rule> Rule for DualParse<Outer, Inner> {
     }
 }
 
+/// Rule that parses `T` as if it's a singular token for lookahead purposes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CompoundToken<T> {
     pub value: T,
@@ -912,7 +889,7 @@ pub struct CompoundToken<T> {
 
 struct CompoundTokenDef<T>(PhantomData<T>);
 
-impl<T: 'static> TokenDef for CompoundTokenDef<T> {
+impl<T: 'static> Token for CompoundTokenDef<T> {
     fn try_lex(_: &str, _: Location) -> Option<LocationRange> {
         None
     }
@@ -936,19 +913,19 @@ impl<T: Rule> Rule for CompoundToken<T> {
     fn pre_parse<Cx: CxType>(
         mut cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
     {
         let end = match cx.look_ahead().get(state.dist).copied() {
-            Some(Some(token)) if token.token_type == TokenType::of::<CompoundTokenDef<T>>() => {
+            Some(Some(token)) if token.token_type == TokenObject::of::<CompoundTokenDef<T>>() => {
                 token.range.end
             }
             Some(_) => {
                 let (_, end) = cx.isolated_parse::<Discard<T>>(state.start, next)?;
                 cx.look_ahead_mut()[state.dist] = Some(AnyToken {
-                    token_type: TokenType::of::<CompoundTokenDef<T>>(),
+                    token_type: TokenObject::of::<CompoundTokenDef<T>>(),
                     range: LocationRange {
                         start: state.start,
                         end,
@@ -969,13 +946,13 @@ impl<T: Rule> Rule for CompoundToken<T> {
         )
     }
 
-    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
         let location = cx.location();
         Ok(match cx.look_ahead().first().copied().flatten() {
-            Some(token) if token.token_type != TokenType::of::<CompoundTokenDef<T>>() => {
+            Some(token) if token.token_type != TokenObject::of::<CompoundTokenDef<T>>() => {
                 return Err(RuleParseFailed { location });
             }
             Some(_) => {
@@ -996,7 +973,7 @@ impl<T: Rule> Rule for CompoundToken<T> {
     }
 }
 
-/// Ignore the lookahead buffer altogether and just try parsing it to see if it matches.
+/// Rule that ignores the lookahead buffer altogether and just tries parsing to see if it matches the source.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Backtrack<T> {
     pub value: T,
@@ -1006,7 +983,7 @@ impl<T: Rule> Rule for Backtrack<T> {
     fn pre_parse<Cx: CxType>(
         mut cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
@@ -1021,7 +998,7 @@ impl<T: Rule> Rule for Backtrack<T> {
         )
     }
 
-    fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
@@ -1036,12 +1013,13 @@ impl<T: Rule> Rule for Backtrack<T> {
     }
 }
 
+/// Rule that parses as `T` but doesn't record any of its errors, and potentially ignores subsequent rules' errors.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Silent<T> {
     pub value: T,
 }
 
-impl<T: Rule> TransformRule for Silent<T> {
+impl<T: Rule> DelegateRule for Silent<T> {
     type Inner = T;
 
     fn print_name(f: &mut Formatter) -> fmt::Result {
@@ -1080,7 +1058,7 @@ impl Rule for Location {
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
@@ -1088,7 +1066,7 @@ impl Rule for Location {
         next.pre_parse(cx, state)
     }
 
-    fn parse<Cx: CxType>(cx: ParseContext<Cx>, _: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(cx: ParseContext<Cx>, _: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
@@ -1100,7 +1078,7 @@ impl Rule for LocationRange {
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
@@ -1117,7 +1095,7 @@ impl Rule for LocationRange {
         )
     }
 
-    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, _: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, _: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
@@ -1143,11 +1121,14 @@ impl Rule for LocationRange {
 }
 
 generic_unit!(
+    /// Rule that parses as `T` but doesn't store the result.
     pub struct Discard<T>;
+    /// Rule that optionally parses as `T`, but doesn't store the result
+    /// and is omitted from the lookahead buffer.
     pub struct Ignore<T>;
 );
 
-impl<T: Rule> TransformRule for Discard<T> {
+impl<T: Rule> DelegateRule for Discard<T> {
     type Inner = T;
 
     fn print_name(f: &mut Formatter) -> fmt::Result {
@@ -1176,7 +1157,7 @@ impl<T: Rule> TransformRule for Discard<T> {
     }
 }
 
-impl<T: Rule> TransformRule for Ignore<T> {
+impl<T: Rule> DelegateRule for Ignore<T> {
     type Inner = Backtrack<Discard<Option<T>>>;
     fn from_inner(_: Self::Inner) -> Self {
         default()
@@ -1227,7 +1208,7 @@ impl<B: Rule, C: Rule> Rule for ControlFlow<B, C> {
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
@@ -1239,7 +1220,7 @@ impl<B: Rule, C: Rule> Rule for ControlFlow<B, C> {
         }
     }
 
-    fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
@@ -1257,12 +1238,13 @@ impl<B: Rule, C: Rule> Rule for ControlFlow<B, C> {
     }
 }
 
+/// Rule that parses `T` is if it may be followed by one or more instances of `T`.
 #[derive(Debug)]
 pub struct ListNode<T> {
     value: Option<T>,
 }
 
-impl<T: Rule> TransformRule for ListNode<T> {
+impl<T: Rule> DelegateRule for ListNode<T> {
     type Inner = ControlFlow<(), Partial<T, ControlFlow<(), ListNode<T>>>>;
 
     fn print_name(f: &mut Formatter) -> fmt::Result {
@@ -1281,6 +1263,7 @@ impl<T: Rule> TransformRule for ListNode<T> {
     }
 }
 
+/// Rule that parses `T` as if it is followed by `After`.
 #[derive(Debug)]
 pub struct Partial<T, After> {
     pub value: T,
@@ -1311,7 +1294,7 @@ impl<T: Rule, After: Rule> Rule for Partial<T, After> {
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
@@ -1319,14 +1302,15 @@ impl<T: Rule, After: Rule> Rule for Partial<T, After> {
         <(T, After)>::pre_parse(cx, state, next)
     }
 
-    fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
-        T::parse(cx, &RuleType::new::<After>(next)).map(Self::new)
+        T::parse(cx, &RuleObject::new::<After>(next)).map(Self::new)
     }
 }
 
+/// Rule that parses `T` after transformation `X` has been applied.
 pub struct Transformed<T, X> {
     pub value: T,
     _x: PhantomData<X>,
@@ -1338,7 +1322,7 @@ impl<T, X> Debug for Transformed<T, X> {
     }
 }
 
-impl<In: Rule, Out: 'static, X: TransformInto<Out, Input = In> + 'static> TransformRule
+impl<In: Rule, Out: 'static, X: TransformInto<Out, Input = In> + 'static> DelegateRule
     for Transformed<Out, X>
 {
     type Inner = In;
@@ -1362,7 +1346,7 @@ struct DelimitedListTailTrailing<T, Delim> {
     _delim: PhantomData<Delim>,
 }
 
-impl<T: Rule, Delim: Rule> TransformRule for DelimitedListTailTrailing<T, Delim> {
+impl<T: Rule, Delim: Rule> DelegateRule for DelimitedListTailTrailing<T, Delim> {
     type Inner = ControlFlow<(), (Discard<Delim>, ControlFlow<(), Partial<T, Self>>)>;
 
     fn from_inner(inner: Self::Inner) -> Self {
@@ -1380,6 +1364,8 @@ impl<T: Rule, Delim: Rule> TransformRule for DelimitedListTailTrailing<T, Delim>
 
 type DelimitedListTail<T, Delim> = ListNode<(Discard<Delim>, T)>;
 
+/// Parses a list of `T` separated by `Delim`.
+/// When `TRAIL` is `true`, the list may end with an optional extra `Delim`
 pub type DelimitedList<T, Delim, const TRAIL: bool = true> =
     TransformList<T, identity, Delim, TRAIL>;
 
@@ -1406,7 +1392,7 @@ where
     fn pre_parse<Cx: CxType>(
         cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
@@ -1418,7 +1404,7 @@ where
         }
     }
 
-    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
@@ -1475,13 +1461,14 @@ where
     }
 }
 
+/// An operator-operand pair.
 #[derive(Debug)]
 pub struct InfixChainItem<T, Op> {
     op: Op,
     value: T,
 }
 
-impl<T: Rule, Op: Rule> TransformRule for InfixChainItem<T, Op> {
+impl<T: Rule, Op: Rule> DelegateRule for InfixChainItem<T, Op> {
     type Inner = (Op, T);
 
     fn print_tree(&self, cx: &PrintContext, f: &mut Formatter) -> fmt::Result {
@@ -1498,13 +1485,14 @@ impl<T: Rule, Op: Rule> TransformRule for InfixChainItem<T, Op> {
     }
 }
 
+/// Parses a set of binary operations with operand `T` and operator `Op`.
 #[derive(Debug)]
 pub struct InfixChain<T, Op> {
     first: T,
     rest: Vec<InfixChainItem<T, Op>>,
 }
 
-impl<T: Rule, Op: Rule> TransformRule for InfixChain<T, Op> {
+impl<T: Rule, Op: Rule> DelegateRule for InfixChain<T, Op> {
     type Inner = (T, Vec<InfixChainItem<T, Op>>);
 
     fn print_tree(&self, cx: &PrintContext, f: &mut Formatter) -> fmt::Result {
@@ -1521,6 +1509,7 @@ impl<T: Rule, Op: Rule> TransformRule for InfixChain<T, Op> {
     }
 }
 
+/// Rule that parses as `Valid`, but rejects if it also parses as `Invalid`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NotParse<Invalid, Valid> {
     _invalid: PhantomData<Invalid>,
@@ -1539,7 +1528,7 @@ impl<Invalid: Rule, Valid: Rule> Rule for NotParse<Invalid, Valid> {
     fn pre_parse<Cx: CxType>(
         mut cx: ParseContext<Cx>,
         state: PreParseState,
-        next: &RuleType<Cx>,
+        next: &RuleObject<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
@@ -1553,7 +1542,7 @@ impl<Invalid: Rule, Valid: Rule> Rule for NotParse<Invalid, Valid> {
         Valid::pre_parse(cx, state, next)
     }
 
-    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleType<Cx>) -> RuleParseResult<Self>
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
@@ -1570,7 +1559,7 @@ impl<Invalid: Rule, Valid: Rule> Rule for NotParse<Invalid, Valid> {
     }
 }
 
-pub fn extract_actual<'src>(src: &'src str, start: usize) -> &'src str {
+fn extract_actual<'src>(src: &'src str, start: usize) -> &'src str {
     if start >= src.len() {
         return "<end-of-file>";
     }
@@ -1589,9 +1578,14 @@ pub fn extract_actual<'src>(src: &'src str, start: usize) -> &'src str {
     &src[start..start + len]
 }
 
+pub fn display_tree<'data>(src: &'data str, ast: &'data impl Rule) -> impl Debug + fmt::Display + 'data {
+    WithSource { src, ast }
+}
+
+/// Parses `src` using the rule `T` and lookahead buffer size `N`.
 pub fn parse_tree<'src, T: Rule, const N: usize>(src: &'src str) -> Result<T, ParseError<'src>> {
     match SizedParseContext::<N>::new_with(src, move |cx| {
-        <(T, Token<Eof>)>::parse(cx, &mut default())
+        <(T, ReadToken<Eof>)>::parse(cx, &mut default())
     }) {
         (Ok((value, _)), _) => Ok(value),
         (Err(_), mut err) => {

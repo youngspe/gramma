@@ -1,10 +1,8 @@
-use rs_typed_parser::ast::{
-    CompoundToken, DelimitedList, Discard, DualParse, Ignore, InfixChain, WithSource,
-};
+use gramma::ast::{CompoundToken, DelimitedList, Discard, DualParse, Ignore, InfixChain};
 
 type Blank = Ignore<Space>;
 
-rs_typed_parser::define_rule!(
+gramma::define_rule!(
     #[transform(ignore_before<Space>)]
     pub struct Braces {
         l_brace: Discard<LBrace>,
@@ -62,7 +60,7 @@ rs_typed_parser::define_rule!(
     pub enum Empty {}
 );
 
-rs_typed_parser::define_token!(
+gramma::define_token!(
     #[pattern(exact = "[")]
     pub struct LBracket;
     #[pattern(exact = "]")]
@@ -92,15 +90,15 @@ rs_typed_parser::define_token!(
 #[test]
 pub fn parse_test1() {
     let src = "{a,{a, {{{ a +foo_bar+ {{{a,b} }}}-{}}},b,}, b +b }";
-    let ast = rs_typed_parser::parse_tree::<Braces, 2>(src).unwrap();
-    println!("{:#}", WithSource { src, ast });
+    let ast = gramma::parse_tree::<Braces, 2>(src).unwrap();
+    println!("{:#}", gramma::display_tree(src, &ast));
 }
 
 #[test]
 pub fn parse_test2() {
     let src = "abc_def";
-    let ast = rs_typed_parser::parse_tree::<Ident, 1>(src).unwrap();
-    println!("{:#}", WithSource { src, ast });
+    let ast = gramma::parse_tree::<Ident, 1>(src).unwrap();
+    println!("{:#}", gramma::display_tree(src, &ast));
 }
 
 #[test]
@@ -123,6 +121,6 @@ pub fn parse_test3() {
         },
         b
     }"#;
-    let ast = rs_typed_parser::parse_tree::<Expr, 1>(src).unwrap();
-    println!("{:#}", WithSource { src, ast });
+    let ast = gramma::parse_tree::<Expr, 1>(src).unwrap();
+    println!("{:#}", gramma::display_tree(src, &ast));
 }
