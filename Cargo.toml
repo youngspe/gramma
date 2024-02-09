@@ -2,6 +2,8 @@
 name = "gramma"
 version = "0.2.0"
 edition = "2021"
+description = "Generate a scannerless parser by declaring types."
+license-file = "LICENSE"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
