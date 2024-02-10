@@ -144,7 +144,7 @@ impl<'lt, Cx: CxType> RuleObject<'lt, Cx> {
     /// Begins evaluating this rule, stopping when the lookahead buffer is full.
     #[inline]
     pub fn pre_parse(&self, cx: ParseContext<Cx>, state: PreParseState) -> RuleParseResult<()> {
-        if state.dist >= cx.look_ahead().len() {
+        if state.start > state.end || state.dist >= cx.look_ahead().len() {
             return Ok(());
         }
         (self.pre_parse)(cx, state, self.next.unwrap_or_default())
@@ -442,15 +442,9 @@ impl<T: Rule, U: Rule> Rule for Either<T, U> {
         let Err(err2) = cx.pre_parse::<U>(next) else {
             return U::parse(cx, next).map(Either::Right);
         };
-        let max_location = err1.location.max(err2.location);
 
-        if err1.location == max_location {
-            let _ = cx.record_error::<T>(next);
-        }
-
-        if err2.location == max_location {
-            let _ = cx.record_error::<U>(next);
-        }
+        let _ = cx.record_error::<T>(next);
+        let _ = cx.record_error::<U>(next);
 
         Err(err1.combine(err2))
     }
@@ -1578,7 +1572,10 @@ fn extract_actual<'src>(src: &'src str, start: usize) -> &'src str {
     &src[start..start + len]
 }
 
-pub fn display_tree<'data>(src: &'data str, ast: &'data impl Rule) -> impl Debug + fmt::Display + 'data {
+pub fn display_tree<'data>(
+    src: &'data str,
+    ast: &'data impl Rule,
+) -> impl Debug + fmt::Display + 'data {
     WithSource { src, ast }
 }
 

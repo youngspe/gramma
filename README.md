@@ -65,29 +65,31 @@ let src = "
 ";
 
 let expr = parse_tree::<Expr, 1>(src).unwrap();
-println!("{:#}", display_tree(src, &expr));
 
-// Output:
-//
-// Expr -> (
-//     <Ident "a">,
-//     { "-", {
-//         "(",
-//         Expr -> (
-//             <Ident "b">,
-//             { "+", <Ident "c"> },
-//         ),
-//         ")",
-//     } },
-//     { "+", {
-//         "[",
-//         [
-//             Expr -> <Number "1">,
-//             Expr -> <Number "2">,
-//         ],
-//         "]",
-//     } },
-// )
+let actual_display = format!("{:#}", display_tree(src, &expr));
+let expected_display = r#"
+Expr -> (
+    <Ident "a">,
+    { "-", {
+        "(",
+        Expr -> (
+            <Ident "b">,
+            { "+", <Ident "c"> },
+        ),
+        ")",
+    } },
+    { "+", {
+        "[",
+        [
+            Expr -> <Number "1">,
+            Expr -> <Number "2">,
+        ],
+        "]",
+    } },
+)
+"#.trim();
+
+assert_eq!(actual_display, expected_display);
 ```
 
 

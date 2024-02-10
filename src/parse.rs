@@ -351,14 +351,18 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
         self.by_ref().into_parts()
     }
 
-    fn pre_parse_inner<'next, T: Rule>(self, next: Option<&RuleObject<Cx>>) -> RuleParseResult<()>
+    fn pre_parse_inner<'next, T: Rule>(
+        self,
+        next: Option<&RuleObject<Cx>>,
+        end: Option<Location>,
+    ) -> RuleParseResult<()>
     where
         Cx: 'next,
     {
         let start = self.location();
-        let end = Location {
+        let end = end.unwrap_or(Location {
             position: self.src.len(),
-        };
+        });
         T::pre_parse(
             self.update(ParseContextUpdate {
                 discard: Some(true),
@@ -388,7 +392,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
                 }),
                 ..default()
             })
-            .pre_parse_inner::<T>(next.into())
+            .pre_parse_inner::<T>(next.into(), None)
     }
 
     pub fn record_error<'next, T: Rule>(
@@ -398,7 +402,8 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
     where
         Cx: 'next,
     {
-        self.by_ref().pre_parse_inner::<T>(next.into())
+        let end = (self.error.location >= *self.location).then_some(self.error.location);
+        self.by_ref().pre_parse_inner::<T>(next.into(), end)
     }
 
     pub(crate) fn isolated_parse<T: Rule>(
