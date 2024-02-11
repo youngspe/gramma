@@ -49,11 +49,21 @@ impl<T: Rule + ?Sized> fmt::Display for WithSource<'_, T> {
 
 /// Values used to represent the current parser state in [Rule::pre_parse].
 #[non_exhaustive]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PreParseState {
     pub start: Location,
     pub end: Location,
     pub dist: usize,
+    pub(crate) empty_state: EmptyParseState,
+}
+
+const MAX_CONSECUTIVE_EMPTY: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct EmptyParseState {
+    pub location: Location,
+    pub dist: usize,
+    pub count: usize,
 }
 
 /// Represents part of a grammar.
@@ -143,10 +153,25 @@ impl<'lt, Cx: CxType> RuleObject<'lt, Cx> {
 
     /// Begins evaluating this rule, stopping when the lookahead buffer is full.
     #[inline]
-    pub fn pre_parse(&self, cx: ParseContext<Cx>, state: PreParseState) -> RuleParseResult<()> {
+    pub fn pre_parse(&self, cx: ParseContext<Cx>, mut state: PreParseState) -> RuleParseResult<()> {
         if state.start > state.end || state.dist >= cx.look_ahead().len() {
             return Ok(());
         }
+
+        if state.start == state.empty_state.location && state.dist == state.empty_state.dist {
+            if state.empty_state.count > MAX_CONSECUTIVE_EMPTY {
+                return Err(RuleParseFailed {
+                    location: state.start,
+                });
+            }
+        } else {
+            state.empty_state = EmptyParseState {
+                location: state.start,
+                dist: state.dist,
+                count: 0,
+            }
+        }
+
         (self.pre_parse)(cx, state, self.next.unwrap_or_default())
     }
 }
@@ -429,24 +454,33 @@ impl<T: Rule, U: Rule> Rule for Either<T, U> {
         state: PreParseState,
         next: &RuleObject<Cx>,
     ) -> RuleParseResult<()> {
-        T::pre_parse(cx.by_ref(), state, next).or_else(|_| U::pre_parse(cx, state, next))
+        T::pre_parse(cx.by_ref(), state, next).or_else(|err1| {
+            U::pre_parse(cx, state, next).map_err(|err2| RuleParseFailed {
+                location: err1.location.max(err2.location),
+            })
+        })
     }
 
     fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
+        let location = cx.location();
+
         let Err(err1) = cx.pre_parse::<T>(next) else {
             return T::parse(cx, next).map(Either::Left);
         };
-        let Err(err2) = cx.pre_parse::<U>(next) else {
-            return U::parse(cx, next).map(Either::Right);
-        };
 
-        let _ = cx.record_error::<T>(next);
-        let _ = cx.record_error::<U>(next);
-
-        Err(err1.combine(err2))
+        match U::parse(cx.by_ref(), next) {
+            Err(err2) if err1.location >= err2.location => {
+                cx.set_location(location);
+                T::parse(cx.by_ref(), next).map(Either::Left)
+            }
+            out2 => out2.map(Either::Right),
+        }
+        .break_also(|_| {
+            cx.error_mut().error_rule_location = Some(location);
+        })
     }
 }
 
@@ -682,12 +716,12 @@ impl<T: Token> Rule for ReadToken<T> {
         let location = cx.location();
 
         try_run(|| {
-            if let [Some(token), ..] = **cx.look_ahead() {
-                if token.token_type.token_id() != TypeId::of::<T>() {
-                    return Err(RuleParseFailed { location });
+            if let [Some(token), ..] = **cx.look_ahead_mut() {
+                if token.range.start >= location && token.token_type.token_id() == TypeId::of::<T>()
+                {
+                    cx.advance();
+                    return Ok(token.range.into());
                 }
-                cx.advance();
-                return Ok(token.range.into());
             }
 
             let range = T::try_lex(cx.src(), location).ok_or(RuleParseFailed { location })?;
@@ -695,7 +729,7 @@ impl<T: Token> Rule for ReadToken<T> {
 
             Ok(range.into())
         })
-        .break_also(|err| {
+        .break_also(|err: &mut RuleParseFailed| {
             cx.error_mut()
                 .add_expected(err.location, TokenObject::of::<T>())
         })
@@ -976,13 +1010,16 @@ pub struct Backtrack<T> {
 impl<T: Rule> Rule for Backtrack<T> {
     fn pre_parse<Cx: CxType>(
         mut cx: ParseContext<Cx>,
-        state: PreParseState,
+        mut state: PreParseState,
         next: &RuleObject<Cx>,
     ) -> RuleParseResult<()>
     where
         Self: Sized,
     {
-        let (_, end) = cx.isolated_parse::<(Discard<T>,)>(state.start, next)?;
+        let (_, end) = cx.isolated_parse::<Discard<T>>(state.start, next)?;
+        if end == state.start {
+            state.empty_state.count += 1;
+        }
         next.pre_parse(
             cx,
             PreParseState {
@@ -1151,13 +1188,7 @@ impl<T: Rule> DelegateRule for Discard<T> {
     }
 }
 
-impl<T: Rule> DelegateRule for Ignore<T> {
-    type Inner = Backtrack<Discard<Option<T>>>;
-    fn from_inner(_: Self::Inner) -> Self {
-        default()
-    }
-
-    // impl<T: Rule> Rule for Ignore<T> {
+impl<T: Rule> Rule for Ignore<T> {
     fn print_name(f: &mut Formatter) -> fmt::Result {
         f.write_str("Ignore(")?;
         T::print_name(f)?;
@@ -1170,6 +1201,41 @@ impl<T: Rule> DelegateRule for Ignore<T> {
 
     fn print_visibility(&self, _: &PrintContext) -> PrintVisibility {
         PrintVisibility::Never
+    }
+
+    fn pre_parse<Cx: CxType>(
+        mut cx: ParseContext<Cx>,
+        mut state: PreParseState,
+        next: &RuleObject<Cx>,
+    ) -> RuleParseResult<()>
+    where
+        Self: Sized,
+    {
+        if let Ok((_, end)) = cx.isolated_parse::<Silent<Discard<T>>>(state.start, default()) {
+            if end == state.start {
+                state.empty_state.count += 1;
+            }
+            next.pre_parse(
+                cx,
+                PreParseState {
+                    start: end,
+                    ..state
+                },
+            )
+        } else {
+            state.empty_state.count += 1;
+            next.pre_parse(cx, state)
+        }
+    }
+
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, _: &RuleObject<Cx>) -> RuleParseResult<Self>
+    where
+        Self: Sized,
+    {
+        if let Ok((_, end)) = cx.isolated_parse::<Silent<Discard<T>>>(None, default()) {
+            cx.set_location(end);
+        }
+        Ok(default())
     }
 }
 
@@ -1409,6 +1475,7 @@ where
         let mut out = Vec::new();
         let discard = cx.should_discard();
 
+        let mut i = 0;
         if TRAIL {
             let Continue(Partial { value: first, .. }) = ControlFlow::<
                 (),
@@ -1428,6 +1495,8 @@ where
                 if !discard {
                     out.push(X::transform(item));
                 }
+                i += 1;
+                assert!(i < 200);
             }
         } else {
             let Continue(Partial { value: first, .. }) = ControlFlow::<
@@ -1448,6 +1517,8 @@ where
                 if !discard {
                     out.push(X::transform(item));
                 }
+                i += 1;
+                assert!(i < 200);
             }
         }
 

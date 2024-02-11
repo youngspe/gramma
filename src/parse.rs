@@ -10,7 +10,7 @@ use core::{
 use regex::Regex;
 
 use crate::{
-    ast::{PreParseState, RuleObject, RuleParseResult},
+    ast::{EmptyParseState, PreParseState, RuleObject, RuleParseResult},
     internal_prelude::*,
     token::{AnyToken, TokenType},
     utils::default,
@@ -372,6 +372,11 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
                 start,
                 end,
                 dist: 0,
+                empty_state: EmptyParseState {
+                    location: start,
+                    dist: 0,
+                    count: 0,
+                },
             },
             next.unwrap_or_default(),
         )
@@ -505,6 +510,7 @@ pub struct ParseError<'src> {
     pub location: Location,
     pub actual: &'src str,
     pub expected: Vec<TokenType>,
+    pub error_rule_location: Option<Location>,
 }
 
 impl ParseError<'_> {
