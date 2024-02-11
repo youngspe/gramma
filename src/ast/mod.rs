@@ -425,7 +425,7 @@ pub struct RuleParseFailed {
 }
 
 impl RuleParseFailed {
-    pub fn combine(self, rhs: Self) -> Self {
+    pub fn furthest(self, rhs: Self) -> Self {
         RuleParseFailed {
             location: self.location.max(rhs.location),
         }
@@ -454,11 +454,8 @@ impl<T: Rule, U: Rule> Rule for Either<T, U> {
         state: PreParseState,
         next: &RuleObject<Cx>,
     ) -> RuleParseResult<()> {
-        T::pre_parse(cx.by_ref(), state, next).or_else(|err1| {
-            U::pre_parse(cx, state, next).map_err(|err2| RuleParseFailed {
-                location: err1.location.max(err2.location),
-            })
-        })
+        T::pre_parse(cx.by_ref(), state, next)
+            .or_else(|err1| U::pre_parse(cx, state, next).map_err(|err2| err1.furthest(err2)))
     }
 
     fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
@@ -466,18 +463,21 @@ impl<T: Rule, U: Rule> Rule for Either<T, U> {
         Self: Sized,
     {
         let location = cx.location();
+        try_run(|| {
+            let mut cx = cx.by_ref();
 
-        let Err(err1) = cx.pre_parse::<T>(next) else {
-            return T::parse(cx, next).map(Either::Left);
-        };
+            let Err(err1) = cx.pre_parse::<T>(next) else {
+                return T::parse(cx, next).map(Either::Left);
+            };
+            let Err(err2) = cx.pre_parse::<U>(next) else {
+                return U::parse(cx, next).map(Either::Right);
+            };
 
-        match U::parse(cx.by_ref(), next) {
-            Err(err2) if err1.location >= err2.location => {
-                cx.set_location(location);
-                T::parse(cx.by_ref(), next).map(Either::Left)
-            }
-            out2 => out2.map(Either::Right),
-        }
+            let _ = cx.record_error::<T>(next);
+            let _ = cx.record_error::<U>(next);
+
+            Err(err1.furthest(err2))
+        })
         .break_also(|_| {
             cx.error_mut().error_rule_location = Some(location);
         })
@@ -1395,10 +1395,12 @@ impl<In: Rule, Out: 'static, X: TransformInto<Out, Input = In> + 'static> Delega
     }
 }
 
-type DelimitedListPrototypeTail<T, Delim, Trailing> = (ListNode<(Delim, T)>, Trailing);
+type DelimitedListPrototypeTrailing<T, Delim> =
+    ControlFlow<(), Partial<T, DelimitedListTailTrailing<T, Delim>>>;
 
-type DelimitedListPrototype<T, Delim, Trailing> =
-    Option<(T, DelimitedListPrototypeTail<T, Delim, Trailing>)>;
+type DelimitedListPrototypeTail<T, Delim> = ListNode<(Delim, T)>;
+
+type DelimitedListPrototype<T, Delim> = ControlFlow<(), (T, DelimitedListPrototypeTail<T, Delim>)>;
 
 #[derive(Debug)]
 struct DelimitedListTailTrailing<T, Delim> {
@@ -1407,7 +1409,7 @@ struct DelimitedListTailTrailing<T, Delim> {
 }
 
 impl<T: Rule, Delim: Rule> DelegateRule for DelimitedListTailTrailing<T, Delim> {
-    type Inner = ControlFlow<(), (Discard<Delim>, ControlFlow<(), Partial<T, Self>>)>;
+    type Inner = ControlFlow<(), (Discard<Delim>, DelimitedListPrototypeTrailing<T, Delim>)>;
 
     fn from_inner(inner: Self::Inner) -> Self {
         let value = match inner {
@@ -1458,9 +1460,9 @@ where
         Self: Sized,
     {
         if TRAIL {
-            DelimitedListPrototype::<Out, Delim, Option<Delim>>::pre_parse(cx, state, next)
+            DelimitedListPrototypeTrailing::<In, Delim>::pre_parse(cx, state, next)
         } else {
-            DelimitedListPrototype::<Out, Delim, Empty>::pre_parse(cx, state, next)
+            DelimitedListPrototype::<In, Delim>::pre_parse(cx, state, next)
         }
     }
 

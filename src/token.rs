@@ -159,7 +159,7 @@ macro_rules! _define_token {
         }
 
         fn name() -> &'static str {
-            ::core::concat!("'", $pattern, "'")
+            ::core::stringify!($pattern)
         }
 
         fn print_debug(src: &str, range: $crate::parse::LocationRange, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
