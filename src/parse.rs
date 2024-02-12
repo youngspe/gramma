@@ -351,18 +351,14 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
         self.by_ref().into_parts()
     }
 
-    fn pre_parse_inner<'next, T: Rule>(
-        self,
-        next: Option<&RuleObject<Cx>>,
-        end: Option<Location>,
-    ) -> RuleParseResult<()>
+    fn pre_parse_inner<'next, T: Rule>(self, next: Option<&RuleObject<Cx>>) -> RuleParseResult<()>
     where
         Cx: 'next,
     {
         let start = self.location();
-        let end = end.unwrap_or(Location {
+        let end = Location {
             position: self.src.len(),
-        });
+        };
         T::pre_parse(
             self.update(ParseContextUpdate {
                 discard: Some(true),
@@ -397,7 +393,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
                 }),
                 ..default()
             })
-            .pre_parse_inner::<T>(next.into(), None)
+            .pre_parse_inner::<T>(next.into())
     }
 
     pub fn record_error<'next, T: Rule>(
@@ -407,8 +403,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
     where
         Cx: 'next,
     {
-        let end = (self.error.location >= *self.location).then_some(self.error.location);
-        self.by_ref().pre_parse_inner::<T>(next.into(), end)
+        self.by_ref().pre_parse_inner::<T>(next.into())
     }
 
     pub(crate) fn isolated_parse<T: Rule>(
@@ -505,7 +500,7 @@ impl<A: TokenBufData, S: SliceIndex<[Option<AnyToken>]>> IndexMut<S> for TokenBu
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ParseError<'src> {
     pub location: Location,
     pub actual: &'src str,
@@ -523,8 +518,8 @@ impl ParseError<'_> {
                 self.expected.clear();
             }
         }
-        if !self.expected.contains(&token_type) {
-            self.expected.push(token_type);
+        if let Err(index) = self.expected.binary_search(&token_type) {
+            self.expected.insert(index, token_type)
         }
     }
 

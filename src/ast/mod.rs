@@ -419,7 +419,7 @@ impl<T: Rule> DelegateRule for Box<T> {
 }
 
 /// Simple error type indicating where parsing failed.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RuleParseFailed {
     pub location: Location,
 }
@@ -466,15 +466,31 @@ impl<T: Rule, U: Rule> Rule for Either<T, U> {
         try_run(|| {
             let mut cx = cx.by_ref();
 
-            let Err(err1) = cx.pre_parse::<T>(next) else {
+            let Err(mut err1) = cx.pre_parse::<T>(next) else {
                 return T::parse(cx, next).map(Either::Left);
             };
-            let Err(err2) = cx.pre_parse::<U>(next) else {
+            let Err(mut err2) = cx.record_error::<U>(next) else {
                 return U::parse(cx, next).map(Either::Right);
             };
 
-            let _ = cx.record_error::<T>(next);
-            let _ = cx.record_error::<U>(next);
+            // Not sure if this contributes anything:
+            if let Err(e) = cx.record_error::<T>(next) {
+                err1 = err1.furthest(e);
+            }
+
+            match T::parse(cx.by_ref(), next) {
+                Err(e) => err1 = err1.furthest(e),
+                out => return out.map(Either::Left),
+            }
+
+            cx.set_location(location);
+            match U::parse(cx.by_ref(), next) {
+                Err(e) => err2 = err2.furthest(e),
+                out => return out.map(Either::Right),
+            }
+
+            cx.set_location(location);
+            debug_assert!(cx.error_mut().location >= err1.location.max(err2.location));
 
             Err(err1.furthest(err2))
         })
@@ -680,7 +696,10 @@ impl<T: Token> Rule for ReadToken<T> {
 
         let end = match look_ahead.get_mut(state.dist..) {
             None | Some([]) => return Ok(()),
-            Some([Some(token), ..]) if token.token_type.token_id() == TypeId::of::<T>() => {
+            Some([Some(token), ..])
+                if token.token_type.token_id() == TypeId::of::<T>()
+                    && token.range.start == state.start =>
+            {
                 token.range.end
             }
             Some([token, ..]) => {
@@ -717,7 +736,7 @@ impl<T: Token> Rule for ReadToken<T> {
 
         try_run(|| {
             if let [Some(token), ..] = **cx.look_ahead_mut() {
-                if token.range.start >= location && token.token_type.token_id() == TypeId::of::<T>()
+                if token.range.start == location && token.token_type.token_id() == TypeId::of::<T>()
                 {
                     cx.advance();
                     return Ok(token.range.into());
