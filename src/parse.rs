@@ -312,10 +312,6 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
 
     pub fn set_location(&mut self, location: Location) {
         (*self.location) = location;
-        if *self.location > self.error.location {
-            self.error.location = *self.location;
-            self.error.clear();
-        }
     }
     pub fn advance(&mut self) {
         if let Some(token) = self.look_ahead.shift() {
@@ -518,8 +514,20 @@ impl ParseError<'_> {
                 self.expected.clear();
             }
         }
+
         if let Err(index) = self.expected.binary_search(&token_type) {
             self.expected.insert(index, token_type)
+        }
+    }
+
+    pub fn set_location(&mut self, location: Location) {
+        match location.cmp(&self.location) {
+            Ordering::Less => return,
+            Ordering::Equal => {}
+            Ordering::Greater => {
+                self.location = location;
+                self.expected.clear();
+            }
         }
     }
 

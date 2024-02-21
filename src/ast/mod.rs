@@ -1602,6 +1602,16 @@ pub struct NotParse<Invalid, Valid> {
     pub value: Valid,
 }
 
+impl<Invalid: Rule, Valid> NotParse<Invalid, Valid> {
+    fn validate<Cx: CxType>(cx: &mut ParseContext<Cx>, location: Location) -> RuleParseResult<()> {
+        let Err(_) = cx.isolated_parse::<Invalid>(location, default()) else {
+            cx.error_mut().set_location(location);
+            return Err(RuleParseFailed { location });
+        };
+        Ok(())
+    }
+}
+
 impl<Invalid: Rule, Valid: Rule> Rule for NotParse<Invalid, Valid> {
     fn print_tree(&self, cx: &PrintContext, f: &mut Formatter) -> fmt::Result {
         self.value.print_tree(cx, f)
@@ -1619,27 +1629,22 @@ impl<Invalid: Rule, Valid: Rule> Rule for NotParse<Invalid, Valid> {
     where
         Self: Sized,
     {
-        let Err(_) = cx.isolated_parse::<(Invalid, Accept)>(None, default()) else {
-            return Err(RuleParseFailed {
-                location: cx.location(),
-            });
-        };
-
-        Valid::pre_parse(cx, state, next)
+        let location = cx.location();
+        Valid::pre_parse(cx.by_ref(), state, next)?;
+        Self::validate(&mut cx, location)?;
+        Ok(())
     }
 
     fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
     where
         Self: Sized,
     {
-        let Err(_) = cx.isolated_parse::<(Invalid, Accept)>(None, default()) else {
-            return Err(RuleParseFailed {
-                location: cx.location(),
-            });
-        };
+        let location = cx.location();
+        let value = Valid::parse(cx.by_ref(), next)?;
+        Self::validate(&mut cx, location)?;
 
         Ok(Self {
-            value: Valid::parse(cx, next)?,
+            value,
             _invalid: PhantomData,
         })
     }
