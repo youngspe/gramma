@@ -137,7 +137,7 @@ macro_rules! _define_token {
     (@try_lex $Name:ident (regex = $pattern:literal $(, capture = $cap:literal)? $(,)?)) => {
         fn try_lex(src: &str, location: $crate::parse::Location) -> Option<$crate::parse::LocationRange> {
             $crate::_lazy_regex! {
-                static ref PATTERN => ::core::concat!(r"\A", $pattern);
+                static ref PATTERN => ::core::concat!(r"\A(?:", $pattern, ")");
             }
             $crate::parse::lex_regex(&PATTERN, 0 $(+ $cap)?, src, location)
         }
