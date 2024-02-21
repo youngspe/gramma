@@ -1510,13 +1510,20 @@ where
                 out.push(X::transform(first));
             }
 
+            let mut last_location = cx.location();
+
             while let Some(item) =
                 DelimitedListTailTrailing::<In, Delim>::parse(cx.by_ref(), next)?.value
             {
                 if !discard {
                     out.push(X::transform(item));
                 }
-                i += 1;
+                if cx.location() > last_location {
+                    last_location = cx.location();
+                    i = 0;
+                } else {
+                    i += 1;
+                }
                 assert!(i < 200);
             }
         } else {
@@ -1532,13 +1539,20 @@ where
                 out.push(X::transform(first));
             }
 
+            let mut last_location = cx.location();
+
             while let Some((_, item)) =
                 DelimitedListTail::<In, Delim>::parse(cx.by_ref(), next)?.value
             {
                 if !discard {
                     out.push(X::transform(item));
                 }
-                i += 1;
+                if cx.location() > last_location {
+                    last_location = cx.location();
+                    i = 0;
+                } else {
+                    i += 1;
+                }
                 assert!(i < 200);
             }
         }
