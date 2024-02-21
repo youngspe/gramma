@@ -1597,14 +1597,14 @@ impl<T: Rule, Op: Rule> DelegateRule for InfixChain<T, Op> {
 
 /// Rule that parses as `Valid`, but rejects if it also parses as `Invalid`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NotParse<Invalid, Valid> {
+pub struct NotParse<Invalid, Valid = ()> {
     _invalid: PhantomData<Invalid>,
     pub value: Valid,
 }
 
 impl<Invalid: Rule, Valid> NotParse<Invalid, Valid> {
     fn validate<Cx: CxType>(cx: &mut ParseContext<Cx>, location: Location) -> RuleParseResult<()> {
-        let Err(_) = cx.isolated_parse::<Invalid>(location, default()) else {
+        let Err(_) = cx.isolated_parse::<Discard<Invalid>>(location, default()) else {
             cx.error_mut().set_location(location);
             return Err(RuleParseFailed { location });
         };
