@@ -1,6 +1,6 @@
 [package]
 name = "gramma"
-version = "0.2.7"
+version = "0.2.8"
 edition = "2021"
 description = "Generate a scannerless parser by declaring types."
 license = "MIT"

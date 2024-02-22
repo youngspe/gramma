@@ -1644,8 +1644,8 @@ impl<Invalid: Rule, Valid: Rule> Rule for NotParse<Invalid, Valid> {
         Self: Sized,
     {
         let location = cx.location();
-        Valid::pre_parse(cx.by_ref(), state, next)?;
         Self::validate(&mut cx, location)?;
+        Valid::pre_parse(cx.by_ref(), state, next)?;
         Ok(())
     }
 
@@ -1654,8 +1654,8 @@ impl<Invalid: Rule, Valid: Rule> Rule for NotParse<Invalid, Valid> {
         Self: Sized,
     {
         let location = cx.location();
-        let value = Valid::parse(cx.by_ref(), next)?;
         Self::validate(&mut cx, location)?;
+        let value = Valid::parse(cx.by_ref(), next)?;
 
         Ok(Self {
             value,
