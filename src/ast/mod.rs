@@ -1618,7 +1618,7 @@ pub struct NotParse<Invalid, Valid = ()> {
 
 impl<Invalid: Rule, Valid> NotParse<Invalid, Valid> {
     fn validate<Cx: CxType>(cx: &mut ParseContext<Cx>, location: Location) -> RuleParseResult<()> {
-        let Err(_) = cx.isolated_parse::<Discard<Invalid>>(location, default()) else {
+        let Err(_) = cx.isolated_parse::<Silent<Discard<Invalid>>>(location, default()) else {
             cx.error_mut().set_location(location);
             return Err(RuleParseFailed { location });
         };
@@ -1643,8 +1643,7 @@ impl<Invalid: Rule, Valid: Rule> Rule for NotParse<Invalid, Valid> {
     where
         Self: Sized,
     {
-        let location = cx.location();
-        Self::validate(&mut cx, location)?;
+        Self::validate(&mut cx, state.start)?;
         Valid::pre_parse(cx.by_ref(), state, next)?;
         Ok(())
     }
