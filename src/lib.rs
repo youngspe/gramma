@@ -20,6 +20,7 @@ pub(crate) mod utils;
 pub(crate) mod internal_prelude {
     pub use alloc::{boxed::Box, vec::Vec};
 }
+pub mod error;
 
 pub use ast::{display_tree, parse_tree, Rule};
 pub use parse::ParseError;

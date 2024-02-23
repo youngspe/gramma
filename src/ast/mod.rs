@@ -15,6 +15,7 @@ use core::{
 use either::{for_both, Either};
 
 use crate::{
+    error::ExpectedParseObject,
     internal_prelude::*,
     parse::{
         CxType, Location, LocationRange, ParseContext, ParseContextParts, ParseContextUpdate,
@@ -529,7 +530,7 @@ impl<T: Rule, U: Rule> Rule for (T, U) {
     {
         Ok((
             T::parse(cx.by_ref(), &RuleObject::new::<U>(next))?,
-            U::parse(cx, next)?,
+            U::parse(cx.expecting(None), next)?,
         ))
     }
 }
@@ -690,6 +691,8 @@ impl<T: Token> Rule for ReadToken<T> {
             return Ok(());
         }
 
+        cx = cx.expecting(ExpectedParseObject::from_token::<T>());
+
         let ParseContextParts {
             src, look_ahead, ..
         } = cx.as_parts();
@@ -704,8 +707,7 @@ impl<T: Token> Rule for ReadToken<T> {
             }
             Some([token, ..]) => {
                 let Some(range) = T::try_lex(src, state.start) else {
-                    cx.error_mut()
-                        .add_expected(state.start, TokenObject::of::<T>());
+                    cx.error_at(state.start);
                     return Err(RuleParseFailed {
                         location: state.start,
                     });
@@ -719,7 +721,7 @@ impl<T: Token> Rule for ReadToken<T> {
         };
 
         next.pre_parse(
-            cx,
+            cx.expecting(None),
             PreParseState {
                 start: end,
                 dist: state.dist + 1,
@@ -732,6 +734,7 @@ impl<T: Token> Rule for ReadToken<T> {
     where
         Self: Sized,
     {
+        cx = cx.expecting(ExpectedParseObject::from_token::<T>());
         let location = cx.location();
 
         try_run(|| {
@@ -748,10 +751,7 @@ impl<T: Token> Rule for ReadToken<T> {
 
             Ok(range.into())
         })
-        .break_also(|err: &mut RuleParseFailed| {
-            cx.error_mut()
-                .add_expected(err.location, TokenObject::of::<T>())
-        })
+        .break_also(|err: &mut RuleParseFailed| cx.error_at(err.location))
     }
 }
 
@@ -1619,7 +1619,7 @@ pub struct NotParse<Invalid, Valid = ()> {
 impl<Invalid: Rule, Valid> NotParse<Invalid, Valid> {
     fn validate<Cx: CxType>(cx: &mut ParseContext<Cx>, location: Location) -> RuleParseResult<()> {
         let Err(_) = cx.isolated_parse::<Silent<Discard<Invalid>>>(location, default()) else {
-            cx.error_mut().set_location(location);
+            cx.error_at(location);
             return Err(RuleParseFailed { location });
         };
         Ok(())

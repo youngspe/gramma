@@ -294,6 +294,13 @@ macro_rules! _define_rule {
                 fn name() -> &'static str {
                     ::core::stringify!($Name)
                 }
+
+                fn update_context<Cx: $crate::parse::CxType, R>(
+                    cx: $crate::parse::ParseContext<Cx>,
+                    f: impl FnOnce($crate::parse::ParseContext<Cx>) -> R,
+                ) -> R {
+                    f(cx.expecting($crate::error::ExpectedParseObject::from_rule::<Self>()))
+                }
             }
         };
 

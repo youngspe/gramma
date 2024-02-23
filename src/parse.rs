@@ -11,8 +11,9 @@ use regex::Regex;
 
 use crate::{
     ast::{EmptyParseState, PreParseState, RuleObject, RuleParseResult},
+    error::ExpectedParse,
     internal_prelude::*,
-    token::{AnyToken, TokenType},
+    token::AnyToken,
     utils::default,
     Rule,
 };
@@ -178,6 +179,7 @@ pub struct ParseContext<'src, 'cx, Cx: CxType> {
     discard: bool,
     prefer_continue: bool,
     cx_type: Cx,
+    expected_parse: Option<ExpectedParse>,
     _cx_type: PhantomData<&'cx Cx>,
 }
 
@@ -190,6 +192,7 @@ pub struct ParseContextUpdate<'src, 'cx, Cx: CxType> {
     pub look_ahead: Option<&'cx mut TokenBuf<Cx::LookAhead>>,
     pub prefer_continue: Option<bool>,
     pub discard: Option<bool>,
+    pub expected_parse: Option<Option<ExpectedParse>>,
 }
 
 impl<Cx: CxType> Default for ParseContextUpdate<'_, '_, Cx> {
@@ -201,6 +204,7 @@ impl<Cx: CxType> Default for ParseContextUpdate<'_, '_, Cx> {
             look_ahead: None,
             prefer_continue: None,
             discard: None,
+            expected_parse: None,
         }
     }
 }
@@ -223,6 +227,7 @@ impl<'src, const LA: usize> SizedParseContext<'src, 'static, LA> {
             discard: false,
             look_ahead: &mut default(),
             prefer_continue: true,
+            expected_parse: None,
             cx_type,
             _cx_type: PhantomData,
         });
@@ -240,6 +245,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
             discard,
             look_ahead,
             prefer_continue,
+            expected_parse,
             cx_type,
             ..
         } = self;
@@ -251,6 +257,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
             look_ahead,
             prefer_continue: *prefer_continue,
             cx_type: cx_type.child(),
+            expected_parse: *expected_parse,
             _cx_type: PhantomData,
         }
     }
@@ -278,6 +285,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
             look_ahead,
             discard,
             prefer_continue,
+            expected_parse,
         } = update;
 
         ParseContext {
@@ -287,6 +295,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
             look_ahead: look_ahead.unwrap_or(self.look_ahead),
             discard: discard.unwrap_or(self.discard),
             prefer_continue: prefer_continue.unwrap_or(self.prefer_continue),
+            expected_parse: expected_parse.unwrap_or(self.expected_parse),
             ..self
         }
     }
@@ -296,6 +305,14 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
             discard: Some(true),
             ..default()
         })
+    }
+
+    pub fn expecting(mut self, expected_parse: impl Into<Option<ExpectedParse>>) -> Self {
+        self.expected_parse = match (self.expected_parse, expected_parse.into()) {
+            (None, expected_parse) | (expected_parse @ Some(_), Some(_)) => expected_parse,
+            (_, None) => None,
+        };
+        self
     }
 
     pub fn src(&self) -> &'src str {
@@ -333,6 +350,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
             location,
             error,
             look_ahead,
+            expected_parse,
             ..
         } = self;
         ParseContextParts {
@@ -340,6 +358,7 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
             location: *location,
             error,
             look_ahead,
+            expected_parse,
         }
     }
 
@@ -426,6 +445,13 @@ impl<'src, 'cx, Cx: CxType> ParseContext<'src, 'cx, Cx> {
 
         Ok((out, start))
     }
+
+    pub fn error_at(&mut self, location: Location) {
+        match self.expected_parse {
+            Some(ex) => self.error.add_expected(location, ex),
+            None => self.error.set_location(location),
+        }
+    }
 }
 
 #[non_exhaustive]
@@ -434,6 +460,7 @@ pub struct ParseContextParts<'src, 'cx> {
     pub location: Location,
     pub error: &'cx mut ParseError<'static>,
     pub look_ahead: &'cx mut [Option<AnyToken>],
+    pub expected_parse: Option<ExpectedParse>,
 }
 
 pub trait TokenBufData:
@@ -500,12 +527,12 @@ impl<A: TokenBufData, S: SliceIndex<[Option<AnyToken>]>> IndexMut<S> for TokenBu
 pub struct ParseError<'src> {
     pub location: Location,
     pub actual: &'src str,
-    pub expected: Vec<TokenType>,
+    pub expected: Vec<ExpectedParse>,
     pub error_rule_location: Option<Location>,
 }
 
 impl ParseError<'_> {
-    pub fn add_expected(&mut self, location: Location, token_type: TokenType) {
+    pub fn add_expected(&mut self, location: Location, expected_parse: ExpectedParse) {
         match location.cmp(&self.location) {
             Ordering::Less => return,
             Ordering::Equal => {}
@@ -515,8 +542,8 @@ impl ParseError<'_> {
             }
         }
 
-        if let Err(index) = self.expected.binary_search(&token_type) {
-            self.expected.insert(index, token_type)
+        if let Err(index) = self.expected.binary_search(&expected_parse) {
+            self.expected.insert(index, expected_parse)
         }
     }
 
@@ -535,7 +562,7 @@ impl ParseError<'_> {
         self.expected.clear();
     }
 
-    pub fn expected(&self) -> impl Iterator<Item = TokenType> + '_ {
+    pub fn expected(&self) -> impl Iterator<Item = ExpectedParse> + '_ {
         self.expected.iter().copied()
     }
 }
