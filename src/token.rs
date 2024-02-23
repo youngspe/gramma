@@ -174,8 +174,8 @@ macro_rules! _define_token {
         }
     };
     (@impl_rule $Name:ident ($Ty:ty)) => {
-        impl $crate::ast::DelegateRule for $name {
-            type Inner = $crate::ast::DualParse<$crate::ast::Discard<$crate::ast::ReadToken<$Name>>, $Ty>>;
+        impl $crate::ast::DelegateRule for $Name {
+            type Inner = $crate::ast::DualParse<$crate::ast::Discard<$crate::ast::ReadToken<$Name>>, $Ty>;
 
             fn from_inner(inner: Self::Inner) -> Self {
                 Self(inner.inner)
@@ -233,7 +233,7 @@ macro_rules! _define_token {
             }
         }
 
-        $crate::_define_token! { @impl_rule $Name $(($Ty:ty))? }
+        $crate::_define_token! { @impl_rule $Name $(($Ty))? }
     )*};
 }
 
