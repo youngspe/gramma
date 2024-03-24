@@ -1,5 +1,5 @@
 #![doc = include_str!("../README.md")]
-#![no_std]
+#![cfg_attr(not(all(test, feature = "std")), no_std)]
 extern crate alloc;
 extern crate either;
 extern crate once_cell;
@@ -13,14 +13,16 @@ pub use once_cell::sync::Lazy;
 #[doc(hidden)]
 pub use regex::Regex;
 
+#[macro_use]
+pub(crate) mod utils;
 pub mod ast;
 pub mod parse;
 pub mod token;
-pub(crate) mod utils;
 pub(crate) mod internal_prelude {
     pub use alloc::{boxed::Box, vec::Vec};
 }
 pub mod error;
+pub mod string_matcher;
 
 pub use ast::{display_tree, parse_tree, Rule};
 pub use parse::ParseError;

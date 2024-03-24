@@ -231,3 +231,43 @@ pub(crate) trait FunctionalExt: Sized {
 }
 
 impl<T> FunctionalExt for T {}
+
+pub(crate) trait NotFalse {
+    type Value;
+    fn not_false(self) -> Option<Self::Value>;
+}
+
+impl<T> NotFalse for Option<T> {
+    type Value = T;
+    fn not_false(self) -> Self {
+        self
+    }
+}
+
+impl NotFalse for bool {
+    type Value = ();
+
+    fn not_false(self) -> Option<Self::Value> {
+        self.then_some(())
+    }
+}
+
+macro_rules! not_false {
+    ($opt:expr $(,)?) => {
+        match $crate::utils::NotFalse::not_false($opt) {
+            Some(x) => x,
+            None => return false,
+        }
+    };
+}
+
+macro_rules! debug_log {
+    ($($args:tt)*) => {
+        #[cfg(all(test, feature = "std"))]
+        {
+            if option_env!("EXTRA_LOGGING") == Some("1") {
+                std::println!($($args)*);
+            }
+        }
+    };
+}
