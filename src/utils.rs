@@ -260,14 +260,3 @@ macro_rules! not_false {
         }
     };
 }
-
-macro_rules! debug_log {
-    ($($args:tt)*) => {
-        #[cfg(all(test, feature = "std"))]
-        {
-            if option_env!("EXTRA_LOGGING") == Some("1") {
-                std::println!($($args)*);
-            }
-        }
-    };
-}

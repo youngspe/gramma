@@ -1,15 +1,18 @@
 #![doc = include_str!("../README.md")]
-#![cfg_attr(not(all(test, feature = "std")), no_std)]
+#![no_std]
 extern crate alloc;
 extern crate either;
+#[cfg(feature = "regex")]
 extern crate once_cell;
+#[cfg(feature = "regex")]
 extern crate regex;
 
 #[doc(hidden)]
 pub use either::Either;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "regex", feature = "std"))]
 #[doc(hidden)]
 pub use once_cell::sync::Lazy;
+#[cfg(feature = "regex")]
 #[doc(hidden)]
 pub use regex::Regex;
 
@@ -28,6 +31,7 @@ pub use ast::{display_tree, parse_tree, Rule};
 pub use parse::ParseError;
 pub use token::Token;
 
+#[cfg(feature = "regex")]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! _lazy_regex {
@@ -36,30 +40,31 @@ macro_rules! _lazy_regex {
     };
 }
 
-#[cfg(not(feature = "std"))]
-#[doc(hidden)]
-pub struct Lazy<T> {
-    inner: once_cell::race::OnceBox<T>,
-    init: fn() -> T,
-}
+#[cfg(all(feature = "regex", not(feature = "std")))]
+mod _lazy {
+    pub struct Lazy<T> {
+        inner: once_cell::race::OnceBox<T>,
+        init: fn() -> T,
+    }
 
-#[cfg(not(feature = "std"))]
-#[doc(hidden)]
-impl<T> Lazy<T> {
-    pub const fn new(init: fn() -> T) -> Self {
-        Self {
-            inner: once_cell::race::OnceBox::new(),
-            init,
+    impl<T> Lazy<T> {
+        pub const fn new(init: fn() -> T) -> Self {
+            Self {
+                inner: once_cell::race::OnceBox::new(),
+                init,
+            }
+        }
+    }
+
+    impl<T> core::ops::Deref for Lazy<T> {
+        type Target = T;
+
+        fn deref(&self) -> &Self::Target {
+            self.inner.get_or_init(|| (self.init)().into())
         }
     }
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "regex", not(feature = "std")))]
 #[doc(hidden)]
-impl<T> core::ops::Deref for Lazy<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.inner.get_or_init(|| (self.init)().into())
-    }
-}
+pub use _lazy::Lazy;

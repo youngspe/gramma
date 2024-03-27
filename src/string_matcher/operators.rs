@@ -1,16 +1,37 @@
 use core::{
     fmt,
-    ops::{Add, BitOr},
+    ops::{Add, BitAnd, BitOr, Not},
 };
 
 use crate::utils::default;
 
-use super::{char_matcher::MatchChar, private::DebugPrecedence, Link, MatchString, StringMatcher};
+use super::{
+    char_matcher::MatchChar,
+    traits::{IntersectPattern, IntoMatchString, NegatePattern},
+    DebugPrecedence, Link, MatchString, StringPattern,
+};
 
-#[derive(Clone)]
 pub struct MatchPlus<A, B> {
     matcher1: A,
     matcher2: B,
+}
+
+impl<A, B> IntoMatchString for MatchPlus<A, B>
+where
+    A: IntoMatchString,
+    B: IntoMatchString,
+{
+    type Matcher<'m> = MatchPlus<A::Matcher<'m>, B::Matcher<'m>> where Self: 'm;
+
+    fn into_match_string<'m>(self) -> Self::Matcher<'m>
+    where
+        Self: 'm,
+    {
+        Self::Matcher {
+            matcher1: self.matcher1.into_match_string(),
+            matcher2: self.matcher2.into_match_string(),
+        }
+    }
 }
 
 impl<'m, A, B> MatchString<'m> for MatchPlus<A, B>
@@ -56,29 +77,41 @@ where
     }
 }
 
-impl<'m, A, B> Add<StringMatcher<'m, B>> for StringMatcher<'m, A>
-where
-    A: MatchString<'m>,
-    B: MatchString<'m>,
-{
-    type Output = StringMatcher<'m, MatchPlus<A, B>>;
+impl<'m, A, B> Add<StringPattern<B>> for StringPattern<A> {
+    type Output = StringPattern<MatchPlus<A, B>>;
 
-    fn add(self, rhs: StringMatcher<B>) -> Self::Output {
-        StringMatcher::new(MatchPlus {
+    fn add(self, rhs: StringPattern<B>) -> Self::Output {
+        StringPattern::new(MatchPlus {
             matcher1: self.inner,
             matcher2: rhs.inner,
         })
     }
 }
 
-#[derive(Clone)]
-pub struct MatchOr<'m, A, B> {
+pub struct MatchOr<A, B> {
     matcher1: A,
     matcher2: B,
-    links: (Link<'m>, Link<'m>),
 }
 
-impl<'m, A, B> MatchString<'m> for MatchOr<'m, A, B>
+impl<A, B> IntoMatchString for MatchOr<A, B>
+where
+    A: IntoMatchString,
+    B: IntoMatchString,
+{
+    type Matcher<'m> = MatchOr<A::Matcher<'m>, B::Matcher<'m>> where Self: 'm;
+
+    fn into_match_string<'m>(self) -> Self::Matcher<'m>
+    where
+        Self: 'm,
+    {
+        Self::Matcher {
+            matcher1: self.matcher1.into_match_string(),
+            matcher2: self.matcher2.into_match_string(),
+        }
+    }
+}
+
+impl<'m, A, B> MatchString<'m> for MatchOr<A, B>
 where
     A: MatchString<'m>,
     B: MatchString<'m>,
@@ -89,7 +122,15 @@ where
     }
 
     fn links(&'m self) -> super::Links<'m> {
-        (&self.links).into()
+        self.matcher1.links()
+    }
+
+    fn prev_link(&'m self) -> &'m Link<'m> {
+        self.matcher1.prev_link()
+    }
+
+    fn next_link(&'m self) -> &'m Link<'m> {
+        self.matcher1.next_link()
     }
 
     fn as_char_matcher(&'m self) -> Option<impl MatchChar + 'm> {
@@ -100,12 +141,10 @@ where
     }
 
     fn initialize(&'m self) {
-        self.matcher1.prev_link().set(self.links.0.get());
-        self.matcher1.next_link().set(self.links.1.get());
         self.matcher1.initialize();
 
-        self.matcher2.prev_link().set(self.links.0.get());
-        self.matcher2.next_link().set(self.links.1.get());
+        self.matcher2.prev_link().set(self.prev_link().get());
+        self.matcher2.next_link().set(self.next_link().get());
         self.matcher2.initialize();
     }
 
@@ -119,36 +158,66 @@ where
     }
 }
 
-impl<'m, A, B> BitOr<StringMatcher<'m, B>> for StringMatcher<'m, A>
+impl<A, B, AB> NegatePattern for MatchOr<A, B>
 where
-    A: MatchString<'m>,
-    B: MatchString<'m>,
+    A: NegatePattern,
+    B: NegatePattern,
+    A::Output: IntersectPattern<B::Output, Output = AB>,
 {
-    type Output = StringMatcher<'m, MatchOr<'m, A, B>>;
+    type Output = AB;
 
-    fn bitor(self, rhs: StringMatcher<B>) -> Self::Output {
-        StringMatcher::new(MatchOr {
+    fn negate_pattern(self) -> Self::Output {
+        self.matcher1
+            .negate_pattern()
+            .intersect_pattern(self.matcher2.negate_pattern())
+    }
+}
+
+impl<A, B> BitOr<StringPattern<B>> for StringPattern<A> {
+    type Output = StringPattern<MatchOr<A, B>>;
+
+    fn bitor(self, rhs: StringPattern<B>) -> Self::Output {
+        StringPattern::new(MatchOr {
             matcher1: self.inner,
             matcher2: rhs.inner,
-            links: default(),
         })
     }
 }
 
-#[derive(Clone)]
-pub struct Lookaround<'m, M, const REVERSE: bool> {
+pub struct Lookaround<'m, M, const REVERSE: bool, const NEGATE: bool> {
     inner: M,
     links: (Link<'m>, Link<'m>),
 }
 
-impl<'m, M, const REVERSE: bool> MatchString<'m> for Lookaround<'m, M, REVERSE>
+impl<M, const REVERSE: bool, const NEGATE: bool> IntoMatchString
+    for Lookaround<'_, M, REVERSE, NEGATE>
+where
+    M: IntoMatchString,
+{
+    type Matcher<'m> = Lookaround<'m, M::Matcher<'m>, REVERSE, NEGATE> where Self: 'm;
+
+    fn into_match_string<'m>(self) -> Self::Matcher<'m>
+    where
+        Self: 'm,
+    {
+        Self::Matcher {
+            inner: self.inner.into_match_string(),
+            links: default(),
+        }
+    }
+}
+
+impl<'m, M, const REVERSE: bool, const NEGATE: bool> MatchString<'m>
+    for Lookaround<'m, M, REVERSE, NEGATE>
 where
     M: MatchString<'m>,
 {
     fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
+        let (pop_ok, pop_err) = if NEGATE { (2, 0) } else { (0, 2) };
+
         cx.push_next_or_accept(self)
             .push_reset()
-            .push_frame((), 2)
+            .push_frame(pop_ok, pop_err)
             .reverse(REVERSE);
         cx.run_matcher(&self.inner)
     }
@@ -169,19 +238,72 @@ where
 }
 
 pub fn precedes<'m, M: MatchString<'m>>(
-    matcher: StringMatcher<M>,
-) -> StringMatcher<Lookaround<'m, M, false>> {
-    StringMatcher::new(Lookaround {
+    matcher: StringPattern<M>,
+) -> StringPattern<Lookaround<'m, M, false, false>> {
+    StringPattern::new(Lookaround {
         inner: matcher.inner,
         links: default(),
     })
 }
 
 pub fn follows<'m, M: MatchString<'m>>(
-    matcher: StringMatcher<M>,
-) -> StringMatcher<Lookaround<'m, M, true>> {
-    StringMatcher::new(Lookaround {
+    matcher: StringPattern<M>,
+) -> StringPattern<Lookaround<'m, M, true, false>> {
+    StringPattern::new(Lookaround {
         inner: matcher.inner,
         links: default(),
     })
+}
+
+impl<'m, M, const REVERSE: bool> NegatePattern for Lookaround<'m, M, REVERSE, false> {
+    type Output = Lookaround<'m, M, REVERSE, true>;
+
+    fn negate_pattern(self) -> Self::Output {
+        Lookaround {
+            inner: self.inner,
+            links: self.links,
+        }
+    }
+}
+
+impl<'m, M, const REVERSE: bool> NegatePattern for Lookaround<'m, M, REVERSE, true> {
+    type Output = Lookaround<'m, M, REVERSE, false>;
+
+    fn negate_pattern(self) -> Self::Output {
+        Lookaround {
+            inner: self.inner,
+            links: self.links,
+        }
+    }
+}
+
+impl<M> Not for StringPattern<M>
+where
+    M: NegatePattern,
+{
+    type Output = StringPattern<M::Output>;
+
+    fn not(self) -> Self::Output {
+        StringPattern::new(self.inner.negate_pattern())
+    }
+}
+
+impl<M> StringPattern<M>
+where
+    M: NegatePattern,
+{
+    pub fn not(self) -> StringPattern<M::Output> {
+        !self
+    }
+}
+
+impl<M1, M2> BitAnd<StringPattern<M2>> for StringPattern<M1>
+where
+    M1: IntersectPattern<M2>,
+{
+    type Output = StringPattern<M1::Output>;
+
+    fn bitand(self, rhs: StringPattern<M2>) -> Self::Output {
+        StringPattern::new(self.inner.intersect_pattern(rhs.inner))
+    }
 }

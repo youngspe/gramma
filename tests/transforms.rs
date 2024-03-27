@@ -1,3 +1,4 @@
+#![cfg(feature = "regex")]
 use either::Either;
 use gramma::parse_tree;
 

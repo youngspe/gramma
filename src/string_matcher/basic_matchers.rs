@@ -2,12 +2,28 @@ use core::{borrow::Borrow, fmt};
 
 use crate::utils::default;
 
-use super::{char, Link, Links, MatchString, Matcher, StringMatcher, StringMatcherContext};
+use super::{
+    char, follows, precedes, traits::IntoMatchString, Link, Links, MatchString, Matcher,
+    StringMatcherContext, StringPattern,
+};
 
-#[derive(Clone)]
 pub struct Exactly<'m, B> {
     value: B,
     links: (Link<'m>, Link<'m>),
+}
+
+impl<B: Borrow<str>> IntoMatchString for Exactly<'_, B> {
+    type Matcher<'m> = Exactly<'m, B> where Self: 'm;
+
+    fn into_match_string<'m>(self) -> Self::Matcher<'m>
+    where
+        Self: 'm,
+    {
+        Self::Matcher {
+            value: self.value,
+            links: default(),
+        }
+    }
 }
 
 impl<'m, B: Borrow<str>> MatchString<'m> for Exactly<'m, B> {
@@ -45,14 +61,14 @@ impl<'m, B: Borrow<str>> MatchString<'m> for Exactly<'m, B> {
     fn fmt_matcher(
         &self,
         f: &mut core::fmt::Formatter,
-        _: super::private::DebugPrecedence,
+        _: super::DebugPrecedence,
     ) -> core::fmt::Result {
         fmt::Debug::fmt(self.value.borrow(), f)
     }
 }
 
-pub fn exactly<'m, B: Borrow<str>>(value: B) -> StringMatcher<'m, Exactly<'m, B>> {
-    StringMatcher::new(Exactly {
+pub fn exactly<'m, B: Borrow<str>>(value: B) -> StringPattern<Exactly<'m, B>> {
+    StringPattern::new(Exactly {
         value,
         links: default(),
     })
@@ -80,6 +96,40 @@ impl<'m> MatchString<'m> for Empty<'m> {
     }
 }
 
-pub fn empty<'m>() -> StringMatcher<'m, Empty<'m>> {
-    StringMatcher::new(Empty { links: default() })
+pub fn empty<'m>() -> StringPattern<Empty<'m>> {
+    StringPattern::new(Empty { links: default() })
+}
+
+pub fn line_start<'m>() -> StringPattern<impl IntoMatchString> {
+    follows(char('\n'))
+}
+
+pub fn line_end<'m>() -> StringPattern<impl IntoMatchString> {
+    precedes(exactly("\r\n") | char('\n'))
+}
+
+pub fn src_start<'m>() -> StringPattern<impl IntoMatchString> {
+    !follows(char(..))
+}
+
+pub fn src_end<'m>() -> StringPattern<impl IntoMatchString> {
+    !precedes(char(..))
+}
+
+#[test]
+fn src_start_at_start() {
+    let out = src_start().matcher().match_string(0, "asdf");
+    assert_eq!(out, Some(0..0));
+}
+
+#[test]
+fn src_start_mid_src() {
+    let out = src_start().matcher().match_string(2, "asdf");
+    assert_eq!(out, None);
+}
+
+#[test]
+fn src_start_at_end() {
+    let out = src_start().matcher().match_string(4, "asdf");
+    assert_eq!(out, None);
 }

@@ -1,14 +1,14 @@
 use super::{
-    super::{MatchString, StringMatcher},
+    super::{MatchString, StringPattern},
     word, MatchChar,
 };
 
 use crate::{
-    string_matcher::{Link, Links, StringMatcherContext},
+    string_matcher::{traits::IntoMatchString, Link, Links, StringMatcherContext},
     utils::default,
 };
 
-use core::{fmt, marker::PhantomData};
+use core::fmt;
 
 pub trait BoundaryDef {
     fn is_boundary(&self, pre: &str, post: &str) -> bool;
@@ -106,7 +106,6 @@ where
 pub struct Boundary<'m, D> {
     pub(crate) def: D,
     pub(crate) links: (Link<'m>, Link<'m>),
-    pub(crate) _m: PhantomData<&'m D>,
 }
 
 impl<'m, D> Boundary<'m, D> {
@@ -114,7 +113,22 @@ impl<'m, D> Boundary<'m, D> {
         Self {
             def,
             links: default(),
-            _m: PhantomData,
+        }
+    }
+}
+
+impl<D: BoundaryDef> IntoMatchString for Boundary<'_, D> {
+    type Matcher<'m> = Boundary<'m, D>
+    where
+        Self: 'm;
+
+    fn into_match_string<'m>(self) -> Self::Matcher<'m>
+    where
+        Self: 'm,
+    {
+        Self::Matcher {
+            def: self.def,
+            links: default(),
         }
     }
 }
@@ -129,22 +143,18 @@ impl<'m, D: BoundaryDef> MatchString<'m> for Boundary<'m, D> {
     }
 }
 
-pub fn boundary<'m>(matcher: impl MatchChar + 'm) -> StringMatcher<'m, impl MatchString<'m>> {
+pub fn boundary<'m>(matcher: impl MatchChar + 'm) -> StringPattern<impl IntoMatchString> {
     Boundary::new(boundary_def(matcher).fmt(|| ("boundary", true))).into()
 }
 
-pub fn boundary_start<'m>(
-    matcher: impl MatchChar + 'm,
-) -> StringMatcher<'m, impl MatchString<'m>> {
+pub fn boundary_start<'m>(matcher: impl MatchChar + 'm) -> StringPattern<impl IntoMatchString> {
     Boundary::new(boundary_start_def(matcher).fmt(|| ("boundary_start", true))).into()
 }
 
-pub fn boundary_end<'m>(
-    matcher: impl MatchChar + 'm,
-) -> StringMatcher<'m, impl MatchString<'m>> {
+pub fn boundary_end<'m>(matcher: impl MatchChar + 'm) -> StringPattern<impl IntoMatchString> {
     Boundary::new(boundary_end_def(matcher).fmt(|| ("boundary_end", true))).into()
 }
 
-pub fn word_boundary<'m>() -> StringMatcher<'m, impl MatchString<'m> + 'm> {
+pub fn word_boundary<'m>() -> StringPattern<impl IntoMatchString> {
     Boundary::new(boundary_def(word()).fmt(|| ("word_boundary", false))).into()
 }

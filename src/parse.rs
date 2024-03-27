@@ -7,12 +7,11 @@ use core::{
     slice::SliceIndex,
 };
 
-use regex::Regex;
-
 use crate::{
     ast::{EmptyParseState, PreParseState, RuleObject, RuleParseResult},
     error::ExpectedParse,
     internal_prelude::*,
+    string_matcher::{MatchString, StringMatcher},
     token::AnyToken,
     utils::default,
     Rule,
@@ -53,6 +52,10 @@ impl LocationRange {
             start: self.start.min(other.start),
             end: self.end.max(other.end),
         }
+    }
+
+    pub fn slice<'src>(self, src: &'src str) -> &'src str {
+        &src[self.start.position..self.end.position]
     }
 }
 
@@ -118,8 +121,9 @@ impl SubAssign<usize> for LocationRange {
     }
 }
 
+#[cfg(feature = "regex")]
 pub fn lex_regex(
-    regex: &Regex,
+    regex: &regex::Regex,
     capture: usize,
     src: &str,
     location: Location,
@@ -130,6 +134,10 @@ pub fn lex_regex(
     } else {
         regex.captures(src)?.get(capture)?.range()
     };
+
+    if start == end {
+        return None;
+    }
 
     Some(LocationRange {
         start: location + start,
@@ -143,6 +151,20 @@ pub fn lex_exact(pattern: &str, src: &str, location: Location) -> Option<Locatio
         .then_some(LocationRange {
             start: location,
             end: location + pattern.len(),
+        })
+}
+
+pub fn lex_matcher<'m>(
+    matcher: &'m StringMatcher<impl MatchString<'m>>,
+    src: &str,
+    location: Location,
+) -> Option<LocationRange> {
+    matcher
+        .match_string(location.position, src)
+        .filter(|Range { start, end }| start != end)
+        .map(|r| LocationRange {
+            start: Location { position: r.start },
+            end: Location { position: r.end },
         })
 }
 

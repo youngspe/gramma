@@ -3,7 +3,9 @@ use core::{
     ops::{Bound, RangeBounds},
 };
 
-use super::{private::DebugPrecedence, Link, MatchString, StringMatcher};
+use crate::utils::default;
+
+use super::{traits::IntoMatchString, DebugPrecedence, Link, MatchString, StringPattern};
 
 pub struct Repeat<'m, M> {
     min: u32,
@@ -11,6 +13,32 @@ pub struct Repeat<'m, M> {
     greedy: bool,
     inner: M,
     links: (Link<'m>, Link<'m>),
+}
+
+impl<M: IntoMatchString> IntoMatchString for Repeat<'_, M> {
+    type Matcher<'m> = Repeat<'m, M::Matcher<'m>>
+    where
+        Self: 'm;
+
+    fn into_match_string<'m>(self) -> Self::Matcher<'m>
+    where
+        Self: 'm,
+    {
+        let Self {
+            min,
+            max,
+            greedy,
+            inner,
+            ..
+        } = self;
+        Self::Matcher {
+            min,
+            max,
+            greedy,
+            inner: inner.into_match_string(),
+            links: default(),
+        }
+    }
 }
 
 impl<'m, M: MatchString<'m>> MatchString<'m> for Repeat<'m, M> {
@@ -68,17 +96,17 @@ macro_rules! repeat_count_ranges {
 
 macro_rules! impl_mul {
     ($($Name:ty),* $(,)?) => { $(
-        impl<'m, M: MatchString<'m>> core::ops::Mul<$Name> for StringMatcher<'m, M> {
-            type Output = StringMatcher<'m, Repeat<'m, M>>;
+        impl<'m, M: MatchString<'m>> core::ops::Mul<$Name> for StringPattern<M> {
+            type Output = StringPattern<Repeat<'static, M>>;
 
             fn mul(self, rhs: $Name) -> Self::Output {
                 self.repeat(rhs)
             }
         }
-        impl<'m, M: MatchString<'m>> core::ops::Mul<StringMatcher<'m, M>> for $Name {
-            type Output = StringMatcher<'m, Repeat<'m, M>>;
+        impl<M: MatchString<'static>> core::ops::Mul<StringPattern<M>> for $Name {
+            type Output = StringPattern<Repeat<'static, M>>;
 
-            fn mul(self, rhs: StringMatcher<'m, M>) -> Self::Output {
+            fn mul(self, rhs: StringPattern<M>) -> Self::Output {
                 rhs * self
             }
         }
@@ -102,8 +130,15 @@ impl RepeatCount for u32 {
     }
 }
 
-impl<'m, M: MatchString<'m>> StringMatcher<'m, M> {
-    pub fn repeat(self, count: impl RepeatCount) -> StringMatcher<'m, Repeat<'m, M>> {
+pub fn repeat<'m, M>(
+    count: impl RepeatCount,
+    inner: StringPattern<M>,
+) -> StringPattern<Repeat<'m, M>> {
+    inner.repeat(count)
+}
+
+impl<M> StringPattern<M> {
+    pub fn repeat<'m>(self, count: impl RepeatCount) -> StringPattern<Repeat<'m, M>> {
         let (start, end) = count.bounds();
         let min = match start {
             Bound::Included(&x) => x,
@@ -111,11 +146,11 @@ impl<'m, M: MatchString<'m>> StringMatcher<'m, M> {
             Bound::Unbounded => 0,
         };
         let max = match end {
-            Bound::Included(&x) => x.saturating_add(1),
-            Bound::Excluded(&x) => x,
+            Bound::Included(&x) => x,
+            Bound::Excluded(&x) => x.saturating_sub(1),
             Bound::Unbounded => u32::MAX,
         };
-        StringMatcher::new(Repeat {
+        StringPattern::new(Repeat {
             min,
             max,
             greedy: true,
@@ -123,9 +158,13 @@ impl<'m, M: MatchString<'m>> StringMatcher<'m, M> {
             links: Default::default(),
         })
     }
+
+    pub fn optional<'m>(self) -> StringPattern<Repeat<'m, M>> {
+        self.repeat(..=1)
+    }
 }
 
-impl<'m, M: MatchString<'m>> StringMatcher<'m, Repeat<'m, M>> {
+impl<'m, M: MatchString<'m>> StringPattern<Repeat<'m, M>> {
     pub fn lazy(mut self) -> Self {
         self.inner.greedy = false;
         self

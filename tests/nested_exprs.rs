@@ -1,3 +1,4 @@
+#![cfg(feature = "regex")]
 use gramma::ast::{CompoundToken, DelimitedList, Discard, DualParse, Ignore, InfixChain};
 
 type Blank = Ignore<Space>;

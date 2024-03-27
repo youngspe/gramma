@@ -131,9 +131,10 @@ impl DelegateRule for Eof {
     }
 }
 
+#[cfg(feature = "regex")]
 #[doc(hidden)]
 #[macro_export]
-macro_rules! _define_token {
+macro_rules! _define_token_regex {
     (@try_lex $Name:ident (regex = $pattern:literal $(, capture = $cap:literal)? $(,)?)) => {
         fn try_lex(src: &str, location: $crate::parse::Location) -> Option<$crate::parse::LocationRange> {
             $crate::_lazy_regex! {
@@ -151,6 +152,34 @@ macro_rules! _define_token {
                 ::core::concat!("<",::core::stringify!($Name), " {:?}>"),
                 &src[range.start.position..range.end.position]
             ))
+        }
+    };
+}
+
+#[cfg(not(feature = "regex"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! _define_token_regex {
+    (@try_lex $Name:ident (regex = $($rest:tt)*)) => {
+        fn try_lex(
+            src: &str,
+            location: $crate::parse::Location,
+        ) -> Option<$crate::parse::LocationRange> {
+            ::core::compile_error!(::core::concat!(
+                "Token '",
+                stringify!($Name),
+                "' uses regex pattern but 'regex' feature not enabled."
+            ))
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! _define_token {
+    (@try_lex $Name:ident (regex = $($rest:tt)*)) => {
+        $crate::_define_token_regex! {
+            @try_lex $Name (regex = $($rest)*)
         }
     };
     (@try_lex $Name:ident (exact = $pattern:literal)) => {
@@ -171,6 +200,40 @@ macro_rules! _define_token {
 
         fn print_display(_: &str, _: $crate::parse::LocationRange, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
             f.write_str(::core::stringify!($pattern))
+        }
+    };
+    (@try_lex $Name:ident (matcher = $matcher:expr $(,)?)) => {
+        fn try_lex(src: &str, location: $crate::parse::Location) -> Option<$crate::parse::LocationRange> {
+            $crate::parse::lex_matcher($crate::string_pattern!($matcher), src, location)
+        }
+
+        fn name() -> &'static str {
+            ::core::stringify!($pattern)
+        }
+
+        fn print_debug(src: &str, range: $crate::parse::LocationRange, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+            f.write_fmt(::core::format_args!(
+                ::core::concat!(::core::stringify!($Name), "({:?})"),
+                &src[range.start.position..range.end.position]
+            ))
+        }
+
+        fn print_display(_: &str, _: $crate::parse::LocationRange, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+            f.write_str(::core::stringify!($pattern))
+        }
+    };
+    (@try_lex $Name:ident ($type:ident $($rest:tt)*)) => {
+        fn try_lex(
+            src: &str,
+            location: $crate::parse::Location,
+        ) -> Option<$crate::parse::LocationRange> {
+            ::core::compile_error!(::core::concat!(
+                "Token '",
+                stringify!($Name),
+                "' uses unsupported pattern type '",
+                stringify!($type),
+                "'",
+            ))
         }
     };
     (@impl_rule $Name:ident ($Ty:ty)) => {

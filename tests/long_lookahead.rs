@@ -1,3 +1,4 @@
+#![cfg(feature = "regex")]
 use gramma::ast::{parse_tree, Discard};
 
 gramma::define_token!(

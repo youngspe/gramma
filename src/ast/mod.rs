@@ -21,6 +21,7 @@ use crate::{
         CxType, Location, LocationRange, ParseContext, ParseContextParts, ParseContextUpdate,
         ParseError, SizedParseContext,
     },
+    string_pattern,
     token::{AnyToken, Eof, Token, TokenObject},
     utils::{default, simple_name, try_run, DebugFn, MyTry},
 };
@@ -1668,18 +1669,19 @@ fn extract_actual<'src>(src: &'src str, start: usize) -> &'src str {
         return "<end-of-file>";
     }
 
-    crate::_lazy_regex! {
-        static ref PSEUDO_TOKEN => r"\A.+?\b|.";
-    }
-
     const MAX_LEN: usize = 32;
 
-    let len = PSEUDO_TOKEN
-        .find(&src[start..])
-        .map(|m| m.end().min(MAX_LEN))
-        .unwrap_or(1);
+    let max_end = src.len().min(start + MAX_LEN);
 
-    &src[start..start + len]
+    let src_range = string_pattern!(
+        whitespace().repeat(..).lazy()
+            + whitespace().not().repeat(1..).lazy()
+            + (word_boundary() | precedes(whitespace()))
+    )
+    .match_string(start, &src[start..max_end])
+    .unwrap_or(start..src.len().min(start + 1));
+
+    &src[src_range]
 }
 
 pub fn display_tree<'data>(

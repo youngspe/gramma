@@ -7,7 +7,10 @@ use fmt::Debug;
 
 use crate::utils::{default, DebugFn};
 
-use super::{private::DebugPrecedence, Link, Links, MatchString, StringMatcher};
+use super::{
+    traits::{IntersectPattern, IntoMatchString, NegatePattern},
+    DebugPrecedence, Link, Links, MatchString, StringPattern,
+};
 
 pub trait MatchChar {
     fn match_char(&self, ch: char) -> bool;
@@ -186,7 +189,7 @@ impl<M: MatchChar + ?Sized> MatchChar for MatchCharRef<'_, M> {
     }
 }
 
-impl<'m, M: MatchChar> MatchChar for StringMatcher<'m, CharMatcher<'m, M>> {
+impl<'m, M: MatchChar> MatchChar for StringPattern<CharMatcher<'m, M>> {
     #[inline(always)]
     fn match_char(&self, ch: char) -> bool {
         self.inner.inner.match_char(ch)
@@ -200,6 +203,62 @@ impl<'m, M: MatchChar> MatchChar for StringMatcher<'m, CharMatcher<'m, M>> {
     #[inline(always)]
     fn match_end(&self, src: &str) -> bool {
         self.inner.inner.match_end(src)
+    }
+}
+
+pub struct IntersectChar<M1, M2> {
+    matcher1: M1,
+    matcher2: M2,
+}
+
+impl<M1, M2> MatchChar for IntersectChar<M1, M2>
+where
+    M1: MatchChar,
+    M2: MatchChar,
+{
+    fn match_char(&self, ch: char) -> bool {
+        self.matcher1.match_char(ch) && self.matcher2.match_char(ch)
+    }
+
+    fn match_start(&self, src: &str) -> bool {
+        self.matcher1.match_start(src) && self.matcher2.match_start(src)
+    }
+
+    fn match_end(&self, src: &str) -> bool {
+        self.matcher1.match_end(src) && self.matcher2.match_end(src)
+    }
+
+    fn fmt_char_matcher(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.matcher1.fmt_char_matcher(f)?;
+        f.write_str("&")?;
+        self.matcher2.fmt_char_matcher(f)?;
+        Ok(())
+    }
+}
+
+pub struct NotChar<M> {
+    inner: M,
+}
+
+impl<M> MatchChar for NotChar<M>
+where
+    M: MatchChar,
+{
+    fn match_char(&self, ch: char) -> bool {
+        !self.inner.match_char(ch)
+    }
+
+    fn match_start(&self, src: &str) -> bool {
+        !self.inner.match_start(src)
+    }
+
+    fn match_end(&self, src: &str) -> bool {
+        !self.inner.match_end(src)
+    }
+
+    fn fmt_char_matcher(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("!")?;
+        self.inner.fmt_char_matcher(f)
     }
 }
 
@@ -218,7 +277,22 @@ impl<M> CharMatcher<'_, M> {
     }
 }
 
-impl<'m, M: MatchChar + 'm> MatchString<'m> for CharMatcher<'m, M> {
+impl<M: MatchChar> IntoMatchString for CharMatcher<'_, M> {
+    type Matcher<'m> = CharMatcher<'m, M> where Self: 'm;
+
+    fn into_match_string<'m>(self) -> Self::Matcher<'m>
+    where
+        Self: 'm,
+    {
+        let Self { inner, .. } = self;
+        CharMatcher {
+            inner,
+            links: default(),
+        }
+    }
+}
+
+impl<'m, M: MatchChar> MatchString<'m> for CharMatcher<'m, M> {
     fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
         let ch = not_false!(if cx.is_reversed() {
             cx.pre().chars().next_back()
@@ -253,27 +327,48 @@ impl<'m, M: MatchChar + 'm> MatchString<'m> for CharMatcher<'m, M> {
     }
 }
 
-pub fn char<'m, M: MatchChar>(matcher: M) -> StringMatcher<'m, CharMatcher<'m, M>> {
-    StringMatcher::new(CharMatcher::new(matcher))
+impl<'m, M1: MatchChar, M2: MatchChar> IntersectPattern<CharMatcher<'m, M2>>
+    for CharMatcher<'m, M1>
+{
+    type Output = CharMatcher<'m, IntersectChar<M1, M2>>;
+
+    fn intersect_pattern(self, rhs: CharMatcher<'m, M2>) -> Self::Output {
+        CharMatcher::new(IntersectChar {
+            matcher1: self.inner,
+            matcher2: rhs.inner,
+        })
+    }
 }
 
-pub fn whitespace<'m>() -> StringMatcher<'m, CharMatcher<'m, impl MatchChar>> {
+impl<'m, M: MatchChar> NegatePattern for CharMatcher<'m, M> {
+    type Output = CharMatcher<'m, NotChar<M>>;
+
+    fn negate_pattern(self) -> Self::Output {
+        CharMatcher::new(NotChar { inner: self.inner })
+    }
+}
+
+pub fn char<'m, M: MatchChar>(matcher: M) -> StringPattern<CharMatcher<'m, M>> {
+    StringPattern::new(CharMatcher::new(matcher))
+}
+
+pub fn whitespace<'m>() -> StringPattern<CharMatcher<'m, impl MatchChar>> {
     char(|x: char| char::is_whitespace(x))
 }
 
-pub fn alphanumeric<'m>() -> StringMatcher<'m, CharMatcher<'m, impl MatchChar>> {
+pub fn alphanumeric<'m>() -> StringPattern<CharMatcher<'m, impl MatchChar>> {
     char(char::is_alphanumeric)
 }
 
-pub fn alphabetic<'m>() -> StringMatcher<'m, CharMatcher<'m, impl MatchChar>> {
+pub fn alphabetic<'m>() -> StringPattern<CharMatcher<'m, impl MatchChar>> {
     char(char::is_alphabetic)
 }
 
-pub fn numeric<'m>() -> StringMatcher<'m, CharMatcher<'m, impl MatchChar>> {
+pub fn numeric<'m>() -> StringPattern<CharMatcher<'m, impl MatchChar>> {
     char(char::is_numeric)
 }
 
-pub fn word<'m>() -> StringMatcher<'m, CharMatcher<'m, impl MatchChar>> {
+pub fn word<'m>() -> StringPattern<CharMatcher<'m, impl MatchChar>> {
     char(|ch| matches!(ch, '_' | 'a'..='z' | 'A'..='Z' | '0'..='9'))
 }
 
