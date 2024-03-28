@@ -1678,7 +1678,7 @@ fn extract_actual<'src>(src: &'src str, start: usize) -> &'src str {
             + whitespace().not().repeat(1..).lazy()
             + (word_boundary() | precedes(whitespace()))
     )
-    .match_string(start, &src[start..max_end])
+    .match_string(start, &src[0..max_end])
     .unwrap_or(start..src.len().min(start + 1));
 
     &src[src_range]
