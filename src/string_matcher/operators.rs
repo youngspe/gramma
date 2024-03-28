@@ -237,7 +237,7 @@ where
     }
 }
 
-pub fn precedes<'m, M: MatchString<'m>>(
+pub fn precedes<'m, M: IntoMatchString>(
     matcher: StringPattern<M>,
 ) -> StringPattern<Lookaround<'m, M, false, false>> {
     StringPattern::new(Lookaround {
@@ -246,7 +246,7 @@ pub fn precedes<'m, M: MatchString<'m>>(
     })
 }
 
-pub fn follows<'m, M: MatchString<'m>>(
+pub fn follows<'m, M: IntoMatchString>(
     matcher: StringPattern<M>,
 ) -> StringPattern<Lookaround<'m, M, true, false>> {
     StringPattern::new(Lookaround {

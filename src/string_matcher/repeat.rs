@@ -96,14 +96,14 @@ macro_rules! repeat_count_ranges {
 
 macro_rules! impl_mul {
     ($($Name:ty),* $(,)?) => { $(
-        impl<'m, M: MatchString<'m>> core::ops::Mul<$Name> for StringPattern<M> {
+        impl<M> core::ops::Mul<$Name> for StringPattern<M> {
             type Output = StringPattern<Repeat<'static, M>>;
 
             fn mul(self, rhs: $Name) -> Self::Output {
                 self.repeat(rhs)
             }
         }
-        impl<M: MatchString<'static>> core::ops::Mul<StringPattern<M>> for $Name {
+        impl<M> core::ops::Mul<StringPattern<M>> for $Name {
             type Output = StringPattern<Repeat<'static, M>>;
 
             fn mul(self, rhs: StringPattern<M>) -> Self::Output {
@@ -164,7 +164,7 @@ impl<M> StringPattern<M> {
     }
 }
 
-impl<'m, M: MatchString<'m>> StringPattern<Repeat<'m, M>> {
+impl<'m, M> StringPattern<Repeat<'m, M>> {
     pub fn lazy(mut self) -> Self {
         self.inner.greedy = false;
         self
