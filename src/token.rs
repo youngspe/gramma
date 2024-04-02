@@ -208,7 +208,7 @@ macro_rules! _define_token {
         }
 
         fn name() -> &'static str {
-            ::core::stringify!($pattern)
+            ::core::stringify!($Name)
         }
 
         fn print_debug(src: &str, range: $crate::parse::LocationRange, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
@@ -219,7 +219,7 @@ macro_rules! _define_token {
         }
 
         fn print_display(_: &str, _: $crate::parse::LocationRange, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-            f.write_str(::core::stringify!($pattern))
+            f.write_str(::core::stringify!($Name))
         }
     };
     (@try_lex $Name:ident ($type:ident $($rest:tt)*)) => {
