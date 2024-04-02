@@ -21,7 +21,7 @@ use crate::{
         CxType, Location, LocationRange, ParseContext, ParseContextParts, ParseContextUpdate,
         ParseError, SizedParseContext,
     },
-    string_pattern,
+    string_matcher,
     token::{AnyToken, Eof, Token, TokenObject},
     utils::{default, simple_name, try_run, DebugFn, MyTry},
 };
@@ -1673,7 +1673,7 @@ fn extract_actual<'src>(src: &'src str, start: usize) -> &'src str {
 
     let max_end = src.len().min(start + MAX_LEN);
 
-    let src_range = string_pattern!(
+    let src_range = string_matcher!(
         whitespace().repeat(..).lazy()
             + whitespace().not().repeat(1..).lazy()
             + (word_boundary() | precedes(whitespace()))

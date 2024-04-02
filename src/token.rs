@@ -204,7 +204,7 @@ macro_rules! _define_token {
     };
     (@try_lex $Name:ident (matcher = $matcher:expr $(,)?)) => {
         fn try_lex(src: &str, location: $crate::parse::Location) -> Option<$crate::parse::LocationRange> {
-            $crate::parse::lex_matcher($crate::string_pattern!($matcher), src, location)
+            $crate::parse::lex_matcher($crate::string_matcher!($matcher), src, location)
         }
 
         fn name() -> &'static str {

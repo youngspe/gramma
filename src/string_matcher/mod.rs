@@ -11,13 +11,11 @@ pub(crate) use machine::StringMatcherContext;
 pub(crate) use objects::{Link, Links, Matcher};
 pub(crate) use patterns::*;
 pub(crate) use traits::DebugPrecedence;
-pub use traits::MatchString;
+pub use traits::{IntoMatchString, MatchString};
 
 use crate::utils::default;
 
 use core::{cell::Cell, fmt, ops::Range};
-
-use self::traits::IntoMatchString;
 
 pub mod patterns {
     pub use super::{
@@ -28,7 +26,7 @@ pub mod patterns {
             char, numeric, whitespace, word,
         },
         operators::{follows, precedes},
-        repeat::repeat
+        repeat::repeat,
     };
 }
 
@@ -55,6 +53,11 @@ impl<M: IntoMatchString> StringPattern<M> {
             inner: core::mem::ManuallyDrop::new(self.inner.into_match_string()),
             initialized: false.into(),
         }
+    }
+
+    #[doc(hidden)]
+    pub fn _validate_string_pattern(self) -> Self {
+        self
     }
 }
 

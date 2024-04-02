@@ -359,12 +359,12 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
                     depth: new_depth,
                     last_position: initial_position,
                 };
-                self.stack[repeat_index + 1] = if new_depth >= min {
-                    StackItem::Reset { state: reset_state }
-                } else {
+                self.stack[repeat_index + 1] = if new_depth <= min {
                     StackItem::Pop {
                         range: (0..=2).pop_range(),
                     }
+                } else {
+                    StackItem::Reset { state: reset_state }
                 };
                 None
             }

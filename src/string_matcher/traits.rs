@@ -32,7 +32,7 @@ pub trait MatchString<'m>: AsMatcher<'m> {
         cx: &mut super::machine::StringMatcherContext<'m, '_>,
     ) -> Option<bool>;
 
-    fn match_repeated(
+    fn  match_repeated(
         &'m self,
         cx: &mut super::machine::StringMatcherContext<'m, '_>,
         reset_state: &mut StringMatcherState,
