@@ -8,6 +8,6 @@ pub mod repeat;
 fn test_matches(src: &str, matcher: AnyStringMatcher, start: usize, end: impl Into<Option<usize>>) {
     assert_eq!(
         matcher.match_string(start, src),
-        end.into().map(|end| start..end)
+        Into::<Option<usize>>::into(end).map(|end| start..end)
     )
 }

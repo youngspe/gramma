@@ -27,21 +27,21 @@ impl<B: Borrow<str>> IntoMatchString for Exactly<'_, B> {
 }
 
 impl<'m, B: Borrow<str>> MatchString<'m> for Exactly<'m, B> {
-    fn match_string(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
+    fn match_string(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> Option<bool> {
         let value = self.value.borrow();
         if cx.is_reversed() {
             if !cx.pre().ends_with(value) {
-                return false;
+                return None;
             }
             cx.back_by(value.len());
         } else {
             if !cx.post().starts_with(value) {
-                return false;
+                return None;
             }
             cx.forward_by(value.len());
         }
 
-        cx.push_next(self)
+        cx.run_next(self)
     }
 
     fn as_char_matcher(&'m self) -> Option<impl super::char_matcher::MatchChar + 'm>
@@ -78,9 +78,22 @@ pub struct Empty<'m> {
     links: (Link<'m>, Link<'m>),
 }
 
+impl IntoMatchString for Empty<'_> {
+    type Matcher<'m> = Empty<'m>
+    where
+        Self: 'm;
+
+    fn into_match_string<'m>(self) -> Self::Matcher<'m>
+    where
+        Self: 'm,
+    {
+        Empty { links: default() }
+    }
+}
+
 impl<'m> MatchString<'m> for Empty<'m> {
-    fn match_string(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
-        cx.push_next(self)
+    fn match_string(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> Option<bool> {
+        cx.run_next(self)
     }
 
     fn links(&'m self) -> Links<'m> {

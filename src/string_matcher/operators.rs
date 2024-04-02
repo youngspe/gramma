@@ -39,7 +39,7 @@ where
     A: MatchString<'m>,
     B: MatchString<'m>,
 {
-    fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
+    fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> Option<bool> {
         if cx.is_reversed() {
             cx.run_matcher(&self.matcher2)
         } else {
@@ -116,9 +116,18 @@ where
     A: MatchString<'m>,
     B: MatchString<'m>,
 {
-    fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
+    fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> Option<bool> {
+        let stack_len = cx.stack.len();
+        let initial_state = cx.state;
         cx.push_matcher(&self.matcher2).push_reset();
-        cx.run_matcher(&self.matcher1)
+
+        match cx.run_matcher(&self.matcher1) {
+            Some(false) => {
+                cx.set_state(initial_state).truncate_stack(stack_len);
+                cx.run_matcher(&self.matcher2)
+            }
+            out => out,
+        }
     }
 
     fn links(&'m self) -> super::Links<'m> {
@@ -212,7 +221,7 @@ impl<'m, M, const REVERSE: bool, const NEGATE: bool> MatchString<'m>
 where
     M: MatchString<'m>,
 {
-    fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
+    fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> Option<bool> {
         let (pop_ok, pop_err) = if NEGATE { (2, 0) } else { (0, 2) };
 
         cx.push_next_or_accept(self)

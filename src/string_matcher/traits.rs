@@ -2,7 +2,7 @@ use core::{cell::Cell, fmt};
 
 use crate::utils::DebugFn;
 
-use super::{char_matcher::MatchChar, Link, Links, Matcher};
+use super::{char_matcher::MatchChar, machine::StringMatcherState, Link, Links, Matcher};
 
 pub trait AsMatcher<'m> {
     fn _as_matcher(&'m self) -> Matcher<'m>;
@@ -27,7 +27,33 @@ pub trait MatchString<'m>: AsMatcher<'m> {
         None::<()>
     }
 
-    fn match_string(&'m self, cx: &mut super::machine::StringMatcherContext<'m, '_>) -> bool;
+    fn match_string(
+        &'m self,
+        cx: &mut super::machine::StringMatcherContext<'m, '_>,
+    ) -> Option<bool>;
+
+    fn match_repeated(
+        &'m self,
+        cx: &mut super::machine::StringMatcherContext<'m, '_>,
+        reset_state: &mut StringMatcherState,
+        max_items: &mut u32,
+    ) -> Option<bool> {
+        let mut last_position = reset_state.position;
+        while *max_items > 0 {
+            *max_items -= 1;
+            match self.match_string(cx) {
+                Some(true) => {
+                    *reset_state = cx.state();
+                    if cx.position() == last_position {
+                        *max_items = 0;
+                    }
+                    last_position = cx.position()
+                }
+                out => return out,
+            }
+        }
+        Some(true)
+    }
 
     fn as_matcher(&'m self) -> Matcher<'m> {
         self._as_matcher()

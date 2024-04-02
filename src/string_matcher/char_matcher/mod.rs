@@ -293,14 +293,20 @@ impl<M: MatchChar> IntoMatchString for CharMatcher<'_, M> {
 }
 
 impl<'m, M: MatchChar> MatchString<'m> for CharMatcher<'m, M> {
-    fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
-        let ch = not_false!(if cx.is_reversed() {
+    fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> Option<bool> {
+        let ch = if cx.is_reversed() {
             cx.pre().chars().next_back()
         } else {
             cx.post().chars().next()
-        });
+        };
 
-        not_false!(self.inner.match_char(ch));
+        let Some(ch) = ch else {
+            return Some(false);
+        };
+
+        if !self.inner.match_char(ch) {
+            return Some(false);
+        }
 
         if cx.is_reversed() {
             cx.back_by(ch.len_utf8());
@@ -308,7 +314,7 @@ impl<'m, M: MatchChar> MatchString<'m> for CharMatcher<'m, M> {
             cx.forward_by(ch.len_utf8());
         }
 
-        cx.push_next(self)
+        cx.run_next(self)
     }
 
     fn as_char_matcher(&'m self) -> Option<impl MatchChar + 'm>

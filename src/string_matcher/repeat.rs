@@ -5,12 +5,18 @@ use core::{
 
 use crate::utils::default;
 
-use super::{traits::IntoMatchString, DebugPrecedence, Link, MatchString, StringPattern};
+use super::{
+    machine::{RepeatState, RepeatStyle, StackItem},
+    traits::IntoMatchString,
+    DebugPrecedence, Link, Links, MatchString, Matcher, StringPattern,
+};
+
+struct RepeatContinue {}
 
 pub struct Repeat<'m, M> {
     min: u32,
     max: u32,
-    greedy: bool,
+    style: RepeatStyle,
     inner: M,
     links: (Link<'m>, Link<'m>),
 }
@@ -27,14 +33,14 @@ impl<M: IntoMatchString> IntoMatchString for Repeat<'_, M> {
         let Self {
             min,
             max,
-            greedy,
+            style,
             inner,
             ..
         } = self;
         Self::Matcher {
             min,
             max,
-            greedy,
+            style,
             inner: inner.into_match_string(),
             links: default(),
         }
@@ -42,15 +48,52 @@ impl<M: IntoMatchString> IntoMatchString for Repeat<'_, M> {
 }
 
 impl<'m, M: MatchString<'m>> MatchString<'m> for Repeat<'m, M> {
-    fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
+    fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> Option<bool> {
         let (inner, outer) = if cx.is_reversed() {
             (self.inner.last(), self.prev_link())
         } else {
             (self.inner.first(), self.next_link())
         };
 
-        cx.push_repeat(self.min, self.max, self.greedy, inner, outer.get());
-        false
+        cx.stack.push(
+            outer
+                .get()
+                .map_or(StackItem::Accept, |m| StackItem::Matcher {
+                    matcher: m.into(),
+                }),
+        );
+        cx.push_matcher(inner);
+
+        match self.style {
+            RepeatStyle::Greedy | RepeatStyle::Lazy => {
+                let mut state = cx.state();
+                let RepeatState {
+                    repeat_index: last_repeat,
+                    depth: last_depth,
+                    ..
+                } = state.repeat;
+                let greedy = self.style == RepeatStyle::Greedy;
+                let repeat_index = cx.stack.len() as u16;
+                cx.stack.push(StackItem::Repeat {
+                    min: self.min,
+                    max: self.max,
+                    greedy,
+                    last_repeat,
+                    last_depth,
+                });
+
+                state.repeat = RepeatState {
+                    repeat_index,
+                    depth: 0,
+                    greedy,
+                    min: self.min,
+                    max: self.max,
+                };
+                cx.set_state(state);
+                cx.continue_repeat()
+            }
+            RepeatStyle::Simple => cx.continue_repeat_simple(self.min, self.max, 0),
+        }
     }
 
     fn links(&'m self) -> super::Links<'m> {
@@ -58,6 +101,12 @@ impl<'m, M: MatchString<'m>> MatchString<'m> for Repeat<'m, M> {
     }
 
     fn initialize(&'m self) {
+        if self.style != RepeatStyle::Simple {
+            let Links(prev, next) = self.inner.links();
+            let next_matcher = Matcher::from(&RepeatContinue {});
+            prev.set(next_matcher);
+            next.set(next_matcher);
+        }
         self.inner.initialize()
     }
 
@@ -74,6 +123,19 @@ impl<'m, M: MatchString<'m>> MatchString<'m> for Repeat<'m, M> {
             }
             Ok(())
         })
+    }
+}
+
+impl<'m> MatchString<'m> for RepeatContinue {
+    fn match_string(
+        &'m self,
+        cx: &mut super::machine::StringMatcherContext<'m, '_>,
+    ) -> Option<bool> {
+        cx.continue_repeat()
+    }
+
+    fn links(&'m self) -> Links<'m> {
+        panic!()
     }
 }
 
@@ -153,9 +215,9 @@ impl<M> StringPattern<M> {
         StringPattern::new(Repeat {
             min,
             max,
-            greedy: true,
+            style: default(),
             inner: self.inner,
-            links: Default::default(),
+            links: default(),
         })
     }
 
@@ -165,8 +227,17 @@ impl<M> StringPattern<M> {
 }
 
 impl<'m, M> StringPattern<Repeat<'m, M>> {
+    pub fn greedy(mut self) -> Self {
+        self.inner.style = RepeatStyle::Greedy;
+        self
+    }
     pub fn lazy(mut self) -> Self {
-        self.inner.greedy = false;
+        self.inner.style = RepeatStyle::Lazy;
+        self
+    }
+    /// Repeats as many times as the repeated pattern matches and does not backtrack.
+    pub fn simple(mut self) -> Self {
+        self.inner.style = RepeatStyle::Simple;
         self
     }
 }

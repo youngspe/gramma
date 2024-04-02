@@ -134,8 +134,11 @@ impl<D: BoundaryDef> IntoMatchString for Boundary<'_, D> {
 }
 
 impl<'m, D: BoundaryDef> MatchString<'m> for Boundary<'m, D> {
-    fn match_string(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
-        self.def.is_boundary(cx.pre(), cx.post()) && cx.push_next(self)
+    fn match_string(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> Option<bool> {
+        if !self.def.is_boundary(cx.pre(), cx.post()) {
+            return Some(false);
+        }
+        cx.run_next(self)
     }
 
     fn links(&'m self) -> Links<'m> {
