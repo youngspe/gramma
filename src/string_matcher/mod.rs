@@ -26,7 +26,7 @@ pub mod patterns {
             char, numeric, whitespace, word,
         },
         operators::{follows, precedes},
-        repeat::repeat,
+        repeat::{optional, repeat},
     };
 }
 

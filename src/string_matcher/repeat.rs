@@ -199,6 +199,12 @@ pub fn repeat<'m, M>(
     inner.repeat(count)
 }
 
+pub fn optional<'m, M>(
+    inner: StringPattern<M>,
+) -> StringPattern<Repeat<'m, M>> {
+    inner.optional()
+}
+
 impl<M> StringPattern<M> {
     pub fn repeat<'m>(self, count: impl RepeatCount) -> StringPattern<Repeat<'m, M>> {
         let (start, end) = count.bounds();

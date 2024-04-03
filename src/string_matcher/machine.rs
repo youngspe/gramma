@@ -141,9 +141,9 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
     pub fn push_matcher(&mut self, matcher: impl Into<Matcher<'m>>) -> &mut Self {
         let matcher: Matcher<'m> = matcher.into();
         self.push_matcher_internal(if self.is_reversed() {
-            matcher.first()
-        } else {
             matcher.last()
+        } else {
+            matcher.first()
         })
     }
 
@@ -293,12 +293,18 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
             (true, true) if repeat.greedy => {
                 self.stack.push(outer);
                 self.push_state(outer_state);
-                self.set_state(inner_state).run_stack_item(inner)
+                match self.set_state(inner_state).run_stack_item(inner) {
+                    Some(false) => None,
+                    out => out,
+                }
             }
             (true, true) => {
                 self.stack.push(inner);
                 self.push_state(inner_state);
-                self.set_state(outer_state).run_stack_item(outer)
+                match self.set_state(outer_state).run_stack_item(outer) {
+                    Some(false) => None,
+                    out => out,
+                }
             }
             (true, false) => self.set_state(outer_state).run_stack_item(outer),
             (false, true) => self.set_state(inner_state).run_stack_item(inner),
@@ -333,12 +339,13 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
 
         let output = self.repeat_stack_item(inner, &mut reset_state, &mut max_remaining);
 
-        let new_depth = depth + (max_remaining_init - max_remaining);
+        let mut new_depth = depth + (max_remaining_init - max_remaining);
 
         match output {
             Some(success) => {
                 if !success {
                     self.state = reset_state;
+                    new_depth -= 1;
                 }
 
                 if new_depth < min {

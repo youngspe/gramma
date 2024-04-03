@@ -213,6 +213,39 @@ fn backtrack_empty_miss_simple() {
 }
 
 #[test]
+fn partial_backtrack_empty_match_greedy() {
+    let src = "foobarbazbarbazbarbazqux";
+    test_matches(
+        src,
+        string_matcher!((exactly("barbaz") | exactly("bar")).repeat(1..).greedy() + exactly("bar")),
+        3,
+        18,
+    );
+}
+
+#[test]
+fn partial_backtrack_empty_match_lazy() {
+    let src = "foobarbazbarbazbarbazqux";
+    test_matches(
+        src,
+        string_matcher!((exactly("barbaz") | exactly("bar")).repeat(1..).lazy() + exactly("bar")),
+        3,
+        12,
+    );
+}
+
+#[test]
+fn partial_backtrack_empty_miss_simple() {
+    let src = "foobarbazbarbazbarbazqux";
+    test_matches(
+        src,
+        string_matcher!((exactly("barbaz") | exactly("bar")).repeat(1..).simple() + exactly("bar")),
+        3,
+        None,
+    );
+}
+
+#[test]
 fn complex_repeat_match_greedy() {
     let src = "foo bar foo foo bar foo foo bar foo bar foo";
     test_matches(
@@ -228,6 +261,7 @@ fn complex_repeat_match_greedy() {
 #[test]
 fn complex_repeat_match_lazy() {
     let src = "foo bar foo foo bar foo foo bar foo bar foo";
+    // let src = "fbffbffbfbf";
     test_matches(
         src,
         string_matcher!(

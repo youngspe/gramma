@@ -31,12 +31,12 @@ impl<'m, B: Borrow<str>> MatchString<'m> for Exactly<'m, B> {
         let value = self.value.borrow();
         if cx.is_reversed() {
             if !cx.pre().ends_with(value) {
-                return None;
+                return Some(false);
             }
             cx.back_by(value.len());
         } else {
             if !cx.post().starts_with(value) {
-                return None;
+                return Some(false);
             }
             cx.forward_by(value.len());
         }
