@@ -97,7 +97,10 @@ impl<'m, M: MatchString<'m> + ?Sized> StringMatcher<M> {
         let mut stack = default();
         let mut cx = StringMatcherContext::new(src, &mut stack);
 
-        cx.move_to(start).push_matcher(&*self.inner);
-        cx.execute().then(|| start..cx.position())
+        cx.move_to(start);
+
+        let status = cx.run_matcher(&*self.inner);
+        cx.execute(status)
+            .then(|| start..cx.position())
     }
 }

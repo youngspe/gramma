@@ -231,11 +231,11 @@ pub struct Lookaround<'m, M, const REVERSE: bool, const NEGATE: bool> {
 }
 
 impl<'m, M, const REVERSE: bool, const NEGATE: bool> Lookaround<'m, M, REVERSE, NEGATE> {
-    fn pop_pair(&self) -> (u16, u16) {
+    fn pop_pair(&self, next_len: usize) -> (u16, u16) {
         if NEGATE {
-            (2, 0)
+            (next_len as u16, 0)
         } else {
-            (0, 2)
+            (0, next_len as u16)
         }
     }
 }
@@ -264,12 +264,15 @@ where
     M: MatchString<'m>,
 {
     fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> Option<bool> {
-        let (pop_ok, pop_err) = self.pop_pair();
+        let pre_stack_len = cx.stack.len();
 
-        cx.push_next_or_accept(self)
-            .push_reset()
-            .push_frame(pop_ok, pop_err)
-            .reverse(REVERSE);
+        cx.push_next_or_accept(self);
+        if cx.stack.len() == pre_stack_len {
+            return Some(false);
+        }
+        cx.push_reset();
+        let (pop_ok, pop_err) = self.pop_pair(cx.stack.len() - pre_stack_len);
+        cx.push_frame(pop_ok, pop_err).reverse(REVERSE);
         cx.run_matcher(&self.inner)
     }
 
@@ -288,27 +291,26 @@ where
     }
 
     fn should_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
-        let state = cx.state();
-        let out = self.inner.should_push(cx.reverse(REVERSE));
-        cx.set_state(state);
-        out
-    }
+        if !NEGATE {
+            let state = cx.state();
+            let should_push_inner = self.inner.should_push(cx.reverse(REVERSE));
+            cx.set_state(state);
+            if !should_push_inner {
+                return false;
+            }
+        };
 
-    fn smart_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
-        let initial_stack_len = cx.stack.len();
-        let (pop_ok, pop_err) = self.pop_pair();
+        let next = if cx.is_reversed() {
+            self.prev_link().get()
+        } else {
+            self.next_link().get()
+        };
 
-        let state = cx.state();
-        cx.push_next_or_accept(self)
-            .push_state(state)
-            .push_frame(pop_ok, pop_err)
-            .reverse(REVERSE);
-
-        if !cx.smart_push_matcher(&self.inner) {
-            cx.truncate_stack(initial_stack_len).set_state(state);
-            return false;
+        if let Some(next) = next {
+            cx.should_push_matcher(next)
+        } else {
+            true
         }
-        true
     }
 }
 

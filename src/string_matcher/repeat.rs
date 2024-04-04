@@ -8,7 +8,7 @@ use crate::utils::default;
 use super::{
     machine::{RepeatState, RepeatStyle, StackItem},
     traits::IntoMatchString,
-    DebugPrecedence, Link, Links, MatchString, Matcher, StringPattern,
+    DebugPrecedence, Link, Links, MatchString, Matcher, StringMatcherContext, StringPattern,
 };
 
 struct RepeatContinue {}
@@ -19,6 +19,29 @@ pub struct Repeat<'m, M> {
     style: RepeatStyle,
     inner: M,
     links: (Link<'m>, Link<'m>),
+}
+
+impl<'m, M: MatchString<'m>> Repeat<'m, M> {
+    fn get_repeat_parts(
+        &'m self,
+        cx: &mut StringMatcherContext<'m, '_>,
+    ) -> (StackItem<'m>, StackItem<'m>) {
+        let (inner, outer) = if cx.is_reversed() {
+            (self.inner.last(), self.prev_link())
+        } else {
+            (self.inner.first(), self.next_link())
+        };
+
+        let outer = if let Some(outer) = outer.get() {
+            StackItem::Matcher { matcher: outer }
+        } else {
+            StackItem::Accept
+        };
+
+        let inner = StackItem::Matcher { matcher: inner };
+
+        (outer, inner)
+    }
 }
 
 impl<M: IntoMatchString> IntoMatchString for Repeat<'_, M> {
@@ -49,18 +72,8 @@ impl<M: IntoMatchString> IntoMatchString for Repeat<'_, M> {
 
 impl<'m, M: MatchString<'m>> MatchString<'m> for Repeat<'m, M> {
     fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> Option<bool> {
-        let (inner, outer) = if cx.is_reversed() {
-            (self.inner.last(), self.prev_link())
-        } else {
-            (self.inner.first(), self.next_link())
-        };
-
-        if let Some(outer) = outer.get() {
-            cx.push_matcher(outer);
-        } else {
-            cx.stack.push(StackItem::Accept);
-        }
-        cx.push_matcher(inner);
+        let (outer, inner) = self.get_repeat_parts(cx);
+        cx.stack.extend([outer, inner]);
 
         match self.style {
             RepeatStyle::Greedy | RepeatStyle::Lazy => {
@@ -126,6 +139,18 @@ impl<'m, M: MatchString<'m>> MatchString<'m> for Repeat<'m, M> {
             Ok(())
         })
     }
+
+    fn should_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
+        let (outer, inner) = self.get_repeat_parts(cx);
+        let &Self {
+            min, max, style, ..
+        } = self;
+        let greedy = match style {
+            RepeatStyle::Greedy | RepeatStyle::Simple => true,
+            RepeatStyle::Lazy => false,
+        };
+        cx.should_repeat(outer, inner, greedy, 0, min, max)
+    }
 }
 
 impl<'m> MatchString<'m> for RepeatContinue {
@@ -138,6 +163,19 @@ impl<'m> MatchString<'m> for RepeatContinue {
 
     fn links(&'m self) -> Links<'m> {
         panic!()
+    }
+
+    fn should_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
+        let RepeatState {
+            min,
+            max,
+            depth,
+            greedy,
+            ..
+        } = cx.state().repeat;
+        let (outer, inner) = cx.get_repeat_parts();
+
+        cx.should_repeat(outer, inner, greedy, depth, min, max)
     }
 }
 
@@ -178,9 +216,7 @@ macro_rules! impl_mul {
 }
 
 repeat_count_ranges!(
-    // core::ops::Range<u32>,
     core::ops::RangeInclusive<u32>,
-    // core::ops::RangeTo<u32>,
     core::ops::RangeToInclusive<u32>,
     core::ops::RangeFrom<u32>,
     core::ops::RangeFull,

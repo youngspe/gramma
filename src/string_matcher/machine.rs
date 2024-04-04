@@ -1,5 +1,7 @@
 use smallvec::SmallVec;
 
+use crate::utils::default;
+
 use super::char_matcher::MatchChar;
 use super::Link;
 use super::MatchString;
@@ -7,6 +9,7 @@ use super::Matcher;
 
 use core::{
     fmt::Debug,
+    mem,
     ops::{Range, RangeInclusive, RangeTo, RangeToInclusive},
 };
 
@@ -51,10 +54,11 @@ impl PopRange for u16 {
 }
 
 pub(crate) const MAX_DEPTH: u16 = 16;
+pub(crate) const MAX_SMART_PUSH_DEPTH: u16 = 4;
 
 pub(crate) type MachineStack<'m> = SmallVec<[StackItem<'m>; 8]>;
 
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RepeatState {
     pub(crate) min: u32,
     pub(crate) max: u32,
@@ -63,13 +67,14 @@ pub(crate) struct RepeatState {
     pub(crate) repeat_index: u16,
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct StringMatcherState {
     pub(crate) position: usize,
     pub(crate) reverse: bool,
     pub(crate) repeat: RepeatState,
 }
 
+#[derive(Debug)]
 pub struct StringMatcherContext<'matcher, 'data> {
     pub(crate) src: &'data str,
     pub(crate) stack: &'data mut MachineStack<'matcher>,
@@ -153,20 +158,35 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
             self.push_matcher(matcher);
             return true;
         }
-        self.depth += 1;
+        let old_depth = self.depth;
+        self.depth = (self.depth + 1).max(MAX_DEPTH - MAX_SMART_PUSH_DEPTH);
         let matcher: Matcher<'m> = matcher.into();
         let out = if self.is_reversed() {
             matcher.last().smart_push(self)
         } else {
             matcher.first().smart_push(self)
         };
-        self.depth -= 1;
+        self.depth = old_depth;
+        out
+    }
+
+    pub fn should_push_matcher(&mut self, matcher: impl Into<Matcher<'m>>) -> bool {
+        if self.depth >= MAX_DEPTH {
+            return true;
+        }
+        let old_depth = self.depth;
+        self.depth = (self.depth + 1).max(MAX_DEPTH - MAX_SMART_PUSH_DEPTH);
+        let matcher: Matcher<'m> = matcher.into();
+        let out = matcher.should_push(self);
+        self.depth = old_depth;
         out
     }
 
     pub fn run_matcher(&mut self, matcher: &'m (impl MatchString<'m> + ?Sized)) -> Option<bool> {
         if self.depth >= MAX_DEPTH {
-            self.push_matcher(matcher);
+            if !self.smart_push_matcher(matcher) {
+                return Some(false);
+            }
             None
         } else {
             self.depth += 1;
@@ -186,8 +206,11 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
                 self.push_matcher_internal(matcher);
             } else {
                 self.depth += 1;
-                matcher.smart_push(self);
+                let out = matcher.smart_push(self);
                 self.depth -= 1;
+                if !out {
+                    return Some(false);
+                }
             }
             None
         } else {
@@ -296,11 +319,64 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
         state
     }
 
+    pub(crate) fn get_repeat_parts(&mut self) -> (StackItem<'m>, StackItem<'m>) {
+        let repeat_index = self.state().repeat.repeat_index;
+
+        debug_assert_ne!(
+            repeat_index, 0,
+            "invalid repeat index {repeat_index} with:\n\nstack = {:#?}\n\n state = {:#?}",
+            self.stack, self.state,
+        );
+
+        let outer = self.stack[repeat_index as usize - 2];
+        let inner = self.stack[repeat_index as usize - 1];
+
+        (outer, inner)
+    }
+
+    pub(crate) fn should_repeat(
+        &mut self,
+        outer: StackItem<'m>,
+        inner: StackItem<'m>,
+        greedy: bool,
+        depth: u32,
+        min: u32,
+        max: u32,
+    ) -> bool {
+        enum Part {
+            Outer,
+            Inner,
+        }
+
+        use Part::*;
+
+        let order = if greedy {
+            [Inner, Outer]
+        } else {
+            [Outer, Inner]
+        };
+
+        for part in order {
+            match part {
+                Outer => {
+                    if depth >= min && self.should_push_stack_item(outer) {
+                        return true;
+                    }
+                }
+                Inner => {
+                    if depth < max && self.should_push_stack_item(inner) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
     pub(crate) fn continue_repeat(&mut self) -> Option<bool> {
         let repeat = self.state().repeat;
-
-        let outer = self.stack[repeat.repeat_index as usize - 2];
-        let inner = self.stack[repeat.repeat_index as usize - 1];
+        let (outer, inner) = self.get_repeat_parts();
 
         let use_outer = repeat.depth >= repeat.min;
         let use_inner = repeat.depth < repeat.max;
@@ -319,6 +395,8 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
                 if self.smart_push_stack_item(outer) {
                     self.push_state(outer_state);
                 }
+                self.stack.push(outer);
+                self.push_state(outer_state);
                 match self.set_state(inner_state).run_stack_item(inner) {
                     Some(false) => None,
                     out => out,
@@ -438,7 +516,7 @@ pub(crate) enum RepeatStyle {
     Simple,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum StackItem<'m> {
     Accept,
     Reject,
@@ -473,10 +551,17 @@ pub(crate) enum StackItem<'m> {
 }
 
 impl<'m> StringMatcherContext<'m, '_> {
-    pub(crate) fn pop_range(stack: &mut MachineStack<'m>, (start, end): (u16, u16)) {
-        let lo = stack.len().saturating_sub(end as usize);
-        let hi = stack.len().saturating_sub(start as usize);
-        stack.drain(lo..hi);
+    pub(crate) fn pop_range(&mut self, (start, end): (u16, u16)) {
+        let lo = self.stack.len().saturating_sub(end as usize);
+        let hi = self.stack.len().saturating_sub(start as usize);
+        for i in (lo..hi).rev() {
+            let item = mem::replace(
+                &mut self.stack[i],
+                StackItem::Panic("Stack item currently being popped"),
+            );
+            self.discard_stack_item(i, item);
+        }
+        self.stack.drain(lo..hi);
     }
 
     pub(crate) fn truncate_stack(&mut self, len: usize) -> &mut Self {
@@ -485,11 +570,65 @@ impl<'m> StringMatcherContext<'m, '_> {
                 StackItem::Frame { last_frame, .. } => {
                     self.last_frame = last_frame;
                 }
-                _ => panic!("last_frame should point to a a StackItem::Frame"),
+                _ => panic!("last_frame should point to a StackItem::Frame"),
+            }
+        }
+        while self.state.repeat.repeat_index as usize >= len.max(1) {
+            self.state.repeat = match self.stack[self.state.repeat.repeat_index as usize] {
+                StackItem::Repeat {
+                    last_repeat: repeat_index,
+                    last_depth: depth,
+                    ..
+                } => match self.stack[repeat_index as usize] {
+                    StackItem::Repeat {
+                        min, max, greedy, ..
+                    } => RepeatState {
+                        min,
+                        max,
+                        greedy,
+                        depth,
+                        repeat_index,
+                    },
+                    _ => panic!("last_repeat should point to a StackItem::Repeat"),
+                },
+
+                _ => panic!("repeat_index should point to a StackItem::Repeat"),
             }
         }
         self.stack.truncate(len);
         self
+    }
+
+    fn discard_stack_item(&mut self, index: usize, item: StackItem<'m>) {
+        match item {
+            StackItem::Frame { last_frame, .. } if self.last_frame == index => {
+                self.last_frame = last_frame;
+            }
+            StackItem::Repeat { last_repeat: 0, .. }
+                if self.state.repeat.repeat_index as usize == index =>
+            {
+                self.state.repeat = default();
+            }
+            StackItem::Repeat {
+                last_repeat: repeat_index,
+                last_depth: depth,
+                ..
+            } if self.state.repeat.repeat_index as usize == index => {
+                self.state.repeat = match self.stack[repeat_index as usize] {
+                    StackItem::Repeat {
+                        min, max, greedy, ..
+                    } => RepeatState {
+                        min,
+                        max,
+                        depth,
+                        greedy,
+                        repeat_index,
+                    },
+                    _ => panic!("last_repeat should point to a StackItem::Repeat"),
+                };
+            }
+            _ => {}
+        }
     }
 
     fn run_stack_item(&mut self, item: StackItem<'m>) -> Option<bool> {
@@ -508,11 +647,19 @@ impl<'m> StringMatcherContext<'m, '_> {
     fn smart_push_stack_item(&mut self, item: StackItem<'m>) -> bool {
         match item {
             StackItem::Reject => false,
-            StackItem::Matcher { matcher } => matcher.smart_push(self),
+            StackItem::Matcher { matcher } => self.smart_push_matcher(matcher),
             item => {
                 self.stack.push(item);
                 true
             }
+        }
+    }
+
+    fn should_push_stack_item(&mut self, item: StackItem<'m>) -> bool {
+        match item {
+            StackItem::Reject => false,
+            StackItem::Matcher { matcher } => self.should_push_matcher(matcher),
+            _ => true,
         }
     }
 
@@ -548,30 +695,27 @@ impl<'m> StringMatcherContext<'m, '_> {
     }
 
     fn handle_stack_item(&mut self, item: StackItem<'m>) -> Option<bool> {
+        let index = self.stack.len();
         match item {
             StackItem::Accept => return Some(true),
             StackItem::Reject => return Some(false),
             StackItem::Panic(s) => panic!("{s}"),
-            StackItem::Pop { range } => {
-                Self::pop_range(&mut self.stack, range);
-            }
-            StackItem::Reset { state } => {
-                self.state = state;
-            }
+            StackItem::Pop { range } => self.pop_range(range),
+            StackItem::Reset { state } => self.state = state,
             StackItem::Frame {
                 last_frame,
                 pop_on_success: _,
                 pop_on_error,
             } => {
                 self.last_frame = last_frame;
-                Self::pop_range(&mut self.stack, pop_on_error);
+                self.pop_range(pop_on_error);
             }
             StackItem::Matcher { matcher } => return matcher.match_string(self),
             StackItem::Repeat {
                 last_repeat: repeat_index,
                 last_depth: depth,
                 ..
-            } => {
+            } if self.state.repeat.repeat_index as usize >= index => {
                 let mut state = self.state();
                 if repeat_index != 0 {
                     let StackItem::Repeat {
@@ -591,8 +735,9 @@ impl<'m> StringMatcherContext<'m, '_> {
                     state.repeat = RepeatState::default();
                 }
                 self.set_state(state);
-                self.stack.truncate(self.stack.len() - 2);
+                self.truncate_stack(self.stack.len() - 2);
             }
+            StackItem::Repeat { .. } => {}
             StackItem::RepeatSimple { last_position, .. } if self.position() == last_position => {
                 self.stack.pop();
             }
@@ -603,34 +748,38 @@ impl<'m> StringMatcherContext<'m, '_> {
         None
     }
 
-    pub(crate) fn execute(&mut self) -> bool {
-        while let Some(item) = self.stack.pop() {
-            self.depth = 0;
-            let Some(success) = self.handle_stack_item(item) else {
-                continue;
-            };
-
-            if success {
-                if self.last_frame == usize::MAX {
-                    return true;
-                }
-
-                self.stack.truncate(self.last_frame + 1);
-
-                let Some(StackItem::Frame {
-                    last_frame,
-                    pop_on_success,
-                    pop_on_error: _,
-                }) = self.stack.pop()
-                else {
-                    panic!("expected StackItem to be Frame");
-                };
-
-                self.last_frame = last_frame;
-                Self::pop_range(&mut self.stack, pop_on_success);
-            }
+    pub(crate) fn handle_success(&mut self) -> bool {
+        if self.last_frame == usize::MAX {
+            return true;
         }
 
+        let StackItem::Frame {
+            pop_on_success,
+            pop_on_error: _,
+            ..
+        } = self.stack[self.last_frame]
+        else {
+            panic!("expected StackItem to be Frame");
+        };
+
+        self.truncate_stack(self.last_frame);
+
+        self.pop_range(pop_on_success);
         false
+    }
+
+    pub(crate) fn execute(&mut self, mut success_status: Option<bool>) -> bool {
+        loop {
+            if let Some(true) = success_status {
+                if self.handle_success() {
+                    return true;
+                }
+            }
+
+            success_status = match self.stack.pop().map(|item| self.handle_stack_item(item)) {
+                Some(s) => s,
+                None => return false,
+            };
+        }
     }
 }
