@@ -144,6 +144,10 @@ impl<'m, D: BoundaryDef> MatchString<'m> for Boundary<'m, D> {
     fn links(&'m self) -> Links<'m> {
         (&self.links).into()
     }
+
+    fn fmt_matcher(&self, f: &mut fmt::Formatter, _: crate::string_matcher::DebugPrecedence) -> fmt::Result {
+        self.def.fmt_boundary(f)
+    }
 }
 
 pub fn boundary<'m>(matcher: impl MatchChar + 'm) -> StringPattern<impl IntoMatchString> {

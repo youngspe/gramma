@@ -65,6 +65,14 @@ impl<'m, B: Borrow<str>> MatchString<'m> for Exactly<'m, B> {
     ) -> core::fmt::Result {
         fmt::Debug::fmt(self.value.borrow(), f)
     }
+
+    fn should_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
+        if cx.is_reversed() {
+            cx.pre().ends_with(self.value.borrow())
+        } else {
+            cx.post().starts_with(self.value.borrow())
+        }
+    }
 }
 
 pub fn exactly<'m, B: Borrow<str>>(value: B) -> StringPattern<Exactly<'m, B>> {

@@ -21,9 +21,10 @@ pub mod patterns {
     pub use super::{
         basic_matchers::{empty, exactly, line_end, line_start, src_end, src_start},
         char_matcher::{
-            alphabetic, alphanumeric,
+            alphabetic, alphanumeric, ascii_alphabetic, ascii_alphanumeric, ascii_digit,
+            ascii_hexdigit, ascii_whitespace,
             boundary::{boundary, boundary_end, boundary_start, word_boundary},
-            char, numeric, whitespace, word,
+            char, char_where, char_where_ref, numeric, whitespace, word,
         },
         operators::{follows, precedes},
         repeat::{optional, repeat},

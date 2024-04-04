@@ -1,11 +1,16 @@
-use core::{cell::Cell, fmt};
+use core::{cell::Cell, convert::Infallible, fmt};
 
 use crate::utils::DebugFn;
 
-use super::{char_matcher::MatchChar, machine::StringMatcherState, Link, Links, Matcher};
+use super::{
+    char_matcher::MatchChar, machine::StringMatcherState, Link, Links, Matcher,
+    StringMatcherContext,
+};
 
 pub trait AsMatcher<'m> {
     fn _as_matcher(&'m self) -> Matcher<'m>;
+    fn _should_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool;
+    fn _smart_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool;
 }
 
 pub trait IntoMatchString {
@@ -24,7 +29,7 @@ pub trait MatchString<'m>: AsMatcher<'m> {
     where
         Self: Sized,
     {
-        None::<()>
+        None::<Infallible>
     }
 
     fn match_string(
@@ -32,7 +37,7 @@ pub trait MatchString<'m>: AsMatcher<'m> {
         cx: &mut super::machine::StringMatcherContext<'m, '_>,
     ) -> Option<bool>;
 
-    fn  match_repeated(
+    fn match_repeated(
         &'m self,
         cx: &mut super::machine::StringMatcherContext<'m, '_>,
         reset_state: &mut StringMatcherState,
@@ -53,6 +58,15 @@ pub trait MatchString<'m>: AsMatcher<'m> {
             }
         }
         Some(true)
+    }
+
+    fn should_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
+        self._should_push(cx)
+    }
+
+    /// Returns true if items were pushed that might require a reset
+    fn smart_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
+        self._smart_push(cx)
     }
 
     fn as_matcher(&'m self) -> Matcher<'m> {

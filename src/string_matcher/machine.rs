@@ -1,5 +1,6 @@
 use smallvec::SmallVec;
 
+use super::char_matcher::MatchChar;
 use super::Link;
 use super::MatchString;
 use super::Matcher;
@@ -147,23 +148,47 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
         })
     }
 
+    pub fn smart_push_matcher(&mut self, matcher: impl Into<Matcher<'m>>) -> bool {
+        if self.depth >= MAX_DEPTH {
+            self.push_matcher(matcher);
+            return true;
+        }
+        self.depth += 1;
+        let matcher: Matcher<'m> = matcher.into();
+        let out = if self.is_reversed() {
+            matcher.last().smart_push(self)
+        } else {
+            matcher.first().smart_push(self)
+        };
+        self.depth -= 1;
+        out
+    }
+
     pub fn run_matcher(&mut self, matcher: &'m (impl MatchString<'m> + ?Sized)) -> Option<bool> {
         if self.depth >= MAX_DEPTH {
             self.push_matcher(matcher);
             None
         } else {
             self.depth += 1;
-            if self.is_reversed() {
+            let out = if self.is_reversed() {
                 matcher.last().match_string(self)
             } else {
                 matcher.first().match_string(self)
-            }
+            };
+            self.depth -= 1;
+            out
         }
     }
 
     pub fn push_link(&mut self, link: &Link<'m>) -> Option<bool> {
         if let Some(matcher) = link.get() {
-            self.push_matcher_internal(matcher);
+            if self.depth >= MAX_DEPTH {
+                self.push_matcher_internal(matcher);
+            } else {
+                self.depth += 1;
+                matcher.smart_push(self);
+                self.depth -= 1;
+            }
             None
         } else {
             Some(true)
@@ -291,16 +316,18 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
 
         match (use_outer, use_inner) {
             (true, true) if repeat.greedy => {
-                self.stack.push(outer);
-                self.push_state(outer_state);
+                if self.smart_push_stack_item(outer) {
+                    self.push_state(outer_state);
+                }
                 match self.set_state(inner_state).run_stack_item(inner) {
                     Some(false) => None,
                     out => out,
                 }
             }
             (true, true) => {
-                self.stack.push(inner);
-                self.push_state(inner_state);
+                if self.smart_push_stack_item(inner) {
+                    self.push_state(inner_state);
+                }
                 match self.set_state(outer_state).run_stack_item(outer) {
                     Some(false) => None,
                     out => out,
@@ -377,6 +404,30 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
             }
         }
     }
+
+    pub(crate) fn match_char(&mut self, matcher: &impl MatchChar) -> bool {
+        let ch = if self.is_reversed() {
+            self.pre().chars().next_back()
+        } else {
+            self.post().chars().next()
+        };
+
+        let Some(ch) = ch else {
+            return false;
+        };
+
+        if !matcher.match_char(ch) {
+            return false;
+        }
+
+        if self.is_reversed() {
+            self.back_by(ch.len_utf8());
+        } else {
+            self.forward_by(ch.len_utf8());
+        }
+
+        true
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -428,7 +479,7 @@ impl<'m> StringMatcherContext<'m, '_> {
         stack.drain(lo..hi);
     }
 
-    pub(crate) fn truncate_stack(&mut self, len: usize) {
+    pub(crate) fn truncate_stack(&mut self, len: usize) -> &mut Self {
         while self.last_frame >= len && self.last_frame != usize::MAX {
             match self.stack[self.last_frame] {
                 StackItem::Frame { last_frame, .. } => {
@@ -437,7 +488,8 @@ impl<'m> StringMatcherContext<'m, '_> {
                 _ => panic!("last_frame should point to a a StackItem::Frame"),
             }
         }
-        self.stack.truncate(len)
+        self.stack.truncate(len);
+        self
     }
 
     fn run_stack_item(&mut self, item: StackItem<'m>) -> Option<bool> {
@@ -449,6 +501,17 @@ impl<'m> StringMatcherContext<'m, '_> {
             item => {
                 self.stack.push(item);
                 None
+            }
+        }
+    }
+
+    fn smart_push_stack_item(&mut self, item: StackItem<'m>) -> bool {
+        match item {
+            StackItem::Reject => false,
+            StackItem::Matcher { matcher } => matcher.smart_push(self),
+            item => {
+                self.stack.push(item);
+                true
             }
         }
     }
@@ -472,7 +535,9 @@ impl<'m> StringMatcherContext<'m, '_> {
             StackItem::Panic(s) => panic!("{s}"),
             StackItem::Matcher { matcher } if self.depth < MAX_DEPTH => {
                 self.depth += 1;
-                matcher.match_repeated(self, reset_state, max_times)
+                let out = matcher.match_repeated(self, reset_state, max_times);
+                self.depth -= 1;
+                out
             }
             item => {
                 *max_times -= 1;

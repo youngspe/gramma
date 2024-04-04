@@ -55,13 +55,11 @@ impl<'m, M: MatchString<'m>> MatchString<'m> for Repeat<'m, M> {
             (self.inner.first(), self.next_link())
         };
 
-        cx.stack.push(
-            outer
-                .get()
-                .map_or(StackItem::Accept, |m| StackItem::Matcher {
-                    matcher: m.into(),
-                }),
-        );
+        if let Some(outer) = outer.get() {
+            cx.push_matcher(outer);
+        } else {
+            cx.stack.push(StackItem::Accept);
+        }
         cx.push_matcher(inner);
 
         match self.style {
@@ -73,7 +71,11 @@ impl<'m, M: MatchString<'m>> MatchString<'m> for Repeat<'m, M> {
                     ..
                 } = state.repeat;
                 let greedy = self.style == RepeatStyle::Greedy;
-                let repeat_index = cx.stack.len() as u16;
+                let repeat_index: u16 = cx
+                    .stack
+                    .len()
+                    .try_into()
+                    .expect("string matcher stack exceeded maximum size");
                 cx.stack.push(StackItem::Repeat {
                     min: self.min,
                     max: self.max,
@@ -199,9 +201,7 @@ pub fn repeat<'m, M>(
     inner.repeat(count)
 }
 
-pub fn optional<'m, M>(
-    inner: StringPattern<M>,
-) -> StringPattern<Repeat<'m, M>> {
+pub fn optional<'m, M>(inner: StringPattern<M>) -> StringPattern<Repeat<'m, M>> {
     inner.optional()
 }
 

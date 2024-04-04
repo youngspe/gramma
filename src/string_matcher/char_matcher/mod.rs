@@ -1,4 +1,5 @@
 use core::{
+    convert::Infallible,
     fmt,
     ops::{Range, RangeFrom, RangeInclusive, RangeTo, RangeToInclusive},
 };
@@ -136,6 +137,12 @@ impl<const N: usize> MatchChar for [char; N] {
 impl MatchChar for () {
     fn match_char(&self, _: char) -> bool {
         false
+    }
+}
+
+impl MatchChar for Infallible {
+    fn match_char(&self, _: char) -> bool {
+        match *self {}
     }
 }
 
@@ -294,24 +301,8 @@ impl<M: MatchChar> IntoMatchString for CharMatcher<'_, M> {
 
 impl<'m, M: MatchChar> MatchString<'m> for CharMatcher<'m, M> {
     fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> Option<bool> {
-        let ch = if cx.is_reversed() {
-            cx.pre().chars().next_back()
-        } else {
-            cx.post().chars().next()
-        };
-
-        let Some(ch) = ch else {
+        if !cx.match_char(&self.inner) {
             return Some(false);
-        };
-
-        if !self.inner.match_char(ch) {
-            return Some(false);
-        }
-
-        if cx.is_reversed() {
-            cx.back_by(ch.len_utf8());
-        } else {
-            cx.forward_by(ch.len_utf8());
         }
 
         cx.run_next(self)
@@ -358,8 +349,20 @@ pub fn char<'m, M: MatchChar>(matcher: M) -> StringPattern<CharMatcher<'m, M>> {
     StringPattern::new(CharMatcher::new(matcher))
 }
 
+/// Accepts any char `ch` where `f(ch) == true`.
+pub fn char_where<'m, F: Fn(char) -> bool>(f: F) -> StringPattern<CharMatcher<'m, F>> {
+    char(f)
+}
+
+/// Accepts any char `ch` where `f(&ch) == true`.
+pub fn char_where_ref<'m, F: Fn(&char) -> bool>(
+    f: F,
+) -> StringPattern<CharMatcher<'m, impl MatchChar>> {
+    char(move |ch: char| f(&ch))
+}
+
 pub fn whitespace<'m>() -> StringPattern<CharMatcher<'m, impl MatchChar>> {
-    char(|x: char| char::is_whitespace(x))
+    char(char::is_whitespace)
 }
 
 pub fn alphanumeric<'m>() -> StringPattern<CharMatcher<'m, impl MatchChar>> {
@@ -374,6 +377,27 @@ pub fn numeric<'m>() -> StringPattern<CharMatcher<'m, impl MatchChar>> {
     char(char::is_numeric)
 }
 
+pub fn ascii_whitespace<'m>() -> StringPattern<CharMatcher<'m, impl MatchChar>> {
+    char_where_ref(char::is_ascii_whitespace)
+}
+
+pub fn ascii_alphabetic<'m>() -> StringPattern<CharMatcher<'m, impl MatchChar>> {
+    char_where_ref(char::is_ascii_alphabetic)
+}
+
+pub fn ascii_alphanumeric<'m>() -> StringPattern<CharMatcher<'m, impl MatchChar>> {
+    char_where_ref(char::is_ascii_alphanumeric)
+}
+
+pub fn ascii_digit<'m>() -> StringPattern<CharMatcher<'m, impl MatchChar>> {
+    char_where_ref(char::is_ascii_digit)
+}
+
+pub fn ascii_hexdigit<'m>() -> StringPattern<CharMatcher<'m, impl MatchChar>> {
+    char_where_ref(char::is_ascii_hexdigit)
+}
+
+/// Accepts any `char` that matches `'_' | 'a'..='z' | 'A'..='Z' | '0'..='9'`
 pub fn word<'m>() -> StringPattern<CharMatcher<'m, impl MatchChar>> {
     char(|ch| matches!(ch, '_' | 'a'..='z' | 'A'..='Z' | '0'..='9'))
 }

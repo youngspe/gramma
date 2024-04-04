@@ -1,6 +1,11 @@
 use core::{cell::Cell, fmt};
 
-use super::traits::{AsMatcher, DebugPrecedence, MatchString};
+use super::{
+    char_matcher::MatchChar,
+    machine::StackItem,
+    traits::{AsMatcher, DebugPrecedence, MatchString},
+    StringMatcherContext,
+};
 
 #[derive(Default, Clone)]
 pub struct Link<'m>(Cell<Option<Matcher<'m>>>);
@@ -51,5 +56,30 @@ impl<'m, M: MatchString<'m> + ?Sized> From<&'m M> for Matcher<'m> {
 impl<'m, M: MatchString<'m>> AsMatcher<'m> for M {
     fn _as_matcher(&'m self) -> Matcher<'m> {
         Matcher { inner: self }
+    }
+
+    fn _should_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
+        if let Some(matcher) = self.as_char_matcher() {
+            if cx.is_reversed() {
+                if !matcher.match_end(cx.pre()) {
+                    return false;
+                }
+            } else if !matcher.match_start(cx.post()) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn _smart_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
+        if self.should_push(cx) {
+            cx.stack.push(StackItem::Matcher {
+                matcher: self.into(),
+            });
+            true
+        } else {
+            false
+        }
     }
 }

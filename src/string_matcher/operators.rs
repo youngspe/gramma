@@ -75,6 +75,22 @@ where
             Ok(())
         })
     }
+
+    fn should_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
+        if cx.is_reversed() {
+            self.matcher2.should_push(cx)
+        } else {
+            self.matcher1.should_push(cx)
+        }
+    }
+
+    fn smart_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
+        if cx.is_reversed() {
+            self.matcher2.smart_push(cx)
+        } else {
+            self.matcher1.smart_push(cx)
+        }
+    }
 }
 
 impl<'m, A, B> Add<StringPattern<B>> for StringPattern<A> {
@@ -117,12 +133,33 @@ where
     B: MatchString<'m>,
 {
     fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> Option<bool> {
-        cx.push_matcher(&self.matcher2).push_reset();
+        if let Some(char_matcher) = self.as_char_matcher() {
+            if !cx.match_char(&char_matcher) {
+                return Some(false);
+            }
+
+            return cx.run_next(&self.matcher1);
+        }
+
+        if cx.smart_push_matcher(&self.matcher2) {
+            cx.push_reset();
+        }
 
         match cx.run_matcher(&self.matcher1) {
             Some(false) => None,
             out => out,
         }
+    }
+
+    fn should_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
+        self.matcher1.should_push(cx) || self.matcher2.should_push(cx)
+    }
+
+    fn smart_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
+        if cx.smart_push_matcher(&self.matcher2) {
+            cx.push_reset();
+        }
+        cx.smart_push_matcher(&self.matcher1)
     }
 
     fn links(&'m self) -> super::Links<'m> {
@@ -193,6 +230,16 @@ pub struct Lookaround<'m, M, const REVERSE: bool, const NEGATE: bool> {
     links: (Link<'m>, Link<'m>),
 }
 
+impl<'m, M, const REVERSE: bool, const NEGATE: bool> Lookaround<'m, M, REVERSE, NEGATE> {
+    fn pop_pair(&self) -> (u16, u16) {
+        if NEGATE {
+            (2, 0)
+        } else {
+            (0, 2)
+        }
+    }
+}
+
 impl<M, const REVERSE: bool, const NEGATE: bool> IntoMatchString
     for Lookaround<'_, M, REVERSE, NEGATE>
 where
@@ -217,7 +264,7 @@ where
     M: MatchString<'m>,
 {
     fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> Option<bool> {
-        let (pop_ok, pop_err) = if NEGATE { (2, 0) } else { (0, 2) };
+        let (pop_ok, pop_err) = self.pop_pair();
 
         cx.push_next_or_accept(self)
             .push_reset()
@@ -238,6 +285,30 @@ where
         f.debug_tuple(if REVERSE { "follows" } else { "precedes" })
             .field(&self.inner.as_debug(default()))
             .finish()
+    }
+
+    fn should_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
+        let state = cx.state();
+        let out = self.inner.should_push(cx.reverse(REVERSE));
+        cx.set_state(state);
+        out
+    }
+
+    fn smart_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
+        let initial_stack_len = cx.stack.len();
+        let (pop_ok, pop_err) = self.pop_pair();
+
+        let state = cx.state();
+        cx.push_next_or_accept(self)
+            .push_state(state)
+            .push_frame(pop_ok, pop_err)
+            .reverse(REVERSE);
+
+        if !cx.smart_push_matcher(&self.inner) {
+            cx.truncate_stack(initial_stack_len).set_state(state);
+            return false;
+        }
+        true
     }
 }
 

@@ -308,9 +308,11 @@ fn nested_repeat_lazy() {
     let src = "foo bar baz qux? foo";
     test_matches(
         src,
-        string_matcher!((whitespace().repeat(..) + alphabetic().repeat(1..))
-            .repeat(2..)
-            .lazy()),
+        string_matcher!(
+            (whitespace().repeat(..) + alphabetic().repeat(1..))
+                .repeat(2..)
+                .lazy()
+        ),
         0,
         7,
     );
@@ -357,5 +359,50 @@ fn nested_repeat_with_terminator_lazy() {
         ),
         0,
         15,
+    );
+}
+
+#[test]
+fn char_repeat_greedy() {
+    let src = "baccbaabcbxbac";
+    test_matches(
+        src,
+        string_matcher!(
+            repeat(.., char('a') | char('b') | char('c'))
+                .greedy()
+                + char('x')
+        ),
+        0,
+        11,
+    );
+}
+
+#[test]
+fn char_repeat_lazy() {
+    let src = "baccbaabcbxbac";
+    test_matches(
+        src,
+        string_matcher!(
+            repeat(.., char('a') | char('b') | char('c'))
+                .lazy()
+                + char('x')
+        ),
+        0,
+        11,
+    );
+}
+
+#[test]
+fn char_repeat_simple() {
+    let src = "baccbaabcbxbac";
+    test_matches(
+        src,
+        string_matcher!(
+            repeat(.., char('a') | char('b') | char('c'))
+                .simple()
+                + char('x')
+        ),
+        0,
+        11,
     );
 }
