@@ -520,6 +520,7 @@ pub(crate) enum RepeatStyle {
 pub(crate) enum StackItem<'m> {
     Accept,
     Reject,
+    Noop,
     Panic(&'m str),
     Pop {
         range: (u16, u16),
@@ -555,13 +556,12 @@ impl<'m> StringMatcherContext<'m, '_> {
         let lo = self.stack.len().saturating_sub(end as usize);
         let hi = self.stack.len().saturating_sub(start as usize);
         for i in (lo..hi).rev() {
-            let item = mem::replace(
-                &mut self.stack[i],
-                StackItem::Panic("Stack item currently being popped"),
-            );
+            let item = mem::replace(&mut self.stack[i], StackItem::Noop);
             self.discard_stack_item(i, item);
         }
-        self.stack.drain(lo..hi);
+        if start == 0 {
+            self.stack.drain(lo..hi);
+        }
     }
 
     pub(crate) fn truncate_stack(&mut self, len: usize) -> &mut Self {
@@ -575,6 +575,7 @@ impl<'m> StringMatcherContext<'m, '_> {
         }
         while self.state.repeat.repeat_index as usize >= len.max(1) {
             self.state.repeat = match self.stack[self.state.repeat.repeat_index as usize] {
+                StackItem::Repeat { last_repeat: 0, .. } => default(),
                 StackItem::Repeat {
                     last_repeat: repeat_index,
                     last_depth: depth,
@@ -635,6 +636,7 @@ impl<'m> StringMatcherContext<'m, '_> {
         match item {
             StackItem::Accept => Some(true),
             StackItem::Reject => Some(false),
+            StackItem::Noop => None,
             StackItem::Panic(s) => panic!("{s}"),
             StackItem::Matcher { matcher } => self.run_matcher(*matcher),
             item => {
@@ -679,6 +681,10 @@ impl<'m> StringMatcherContext<'m, '_> {
                 Some(true)
             }
             StackItem::Reject => Some(false),
+            StackItem::Noop => {
+                *max_times = 0;
+                None
+            }
             StackItem::Panic(s) => panic!("{s}"),
             StackItem::Matcher { matcher } if self.depth < MAX_DEPTH => {
                 self.depth += 1;
@@ -699,6 +705,7 @@ impl<'m> StringMatcherContext<'m, '_> {
         match item {
             StackItem::Accept => return Some(true),
             StackItem::Reject => return Some(false),
+            StackItem::Noop => {}
             StackItem::Panic(s) => panic!("{s}"),
             StackItem::Pop { range } => self.pop_range(range),
             StackItem::Reset { state } => self.state = state,
@@ -756,6 +763,7 @@ impl<'m> StringMatcherContext<'m, '_> {
         let StackItem::Frame {
             pop_on_success,
             pop_on_error: _,
+            last_frame,
             ..
         } = self.stack[self.last_frame]
         else {
@@ -763,6 +771,7 @@ impl<'m> StringMatcherContext<'m, '_> {
         };
 
         self.truncate_stack(self.last_frame);
+        self.last_frame = last_frame;
 
         self.pop_range(pop_on_success);
         false

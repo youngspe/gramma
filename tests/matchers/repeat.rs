@@ -334,6 +334,21 @@ fn nested_repeat_simple() {
 }
 
 #[test]
+fn nested_repeat_greedy_in_simple() {
+    let src = "foo bar baz qux? foo";
+    test_matches(
+        src,
+        string_matcher!(
+            (whitespace().repeat(..).simple() + alphabetic().repeat(1..).greedy())
+                .repeat(..)
+                .simple()
+        ),
+        0,
+        15,
+    );
+}
+
+#[test]
 fn nested_repeat_with_terminator_greedy() {
     let src = "foo bar baz qux? foo";
     test_matches(
