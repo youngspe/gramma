@@ -1,3 +1,5 @@
+//! Transformations for use in the `#[transform(...)]` attribute in invocations of the
+//! (define_rule!)[crate::define_rule] macro.
 #![allow(non_camel_case_types)]
 
 use core::marker::PhantomData;
@@ -8,11 +10,15 @@ use super::{
     CompoundToken, DelimitedList, Discard, DualParse, Empty, Ignore, NotParse, TransformList,
 };
 
+/// This trait defines the behavior of a transformation.
 pub trait TransformInto<Out> {
+    /// Actual rule that should be parsed.
     type Input;
+    /// Transform the parsed rule into the target rule.
     fn transform(input: Self::Input) -> Out;
 }
 
+/// Leaves the target rule unchanged.
 #[non_exhaustive]
 pub struct identity {}
 
@@ -24,6 +30,7 @@ impl<T> TransformInto<T> for identity {
     }
 }
 
+/// Applies transform `B` to the target rule, then applies transform `A` to the transformed rule.
 pub struct compose<A, B> {
     _a: A,
     _b: B,
@@ -40,6 +47,9 @@ where
     }
 }
 
+/// Parse and discard `Delim` between each item in the target rule.
+/// If `TRAIL` is true or unspecified, allow an optional instance of `Delim` after the last item.
+/// Useful when matching a `Vec` of rules, for example a comma-separated list.
 pub struct delimited<Delim: Rule, const TRAIL: bool = true> {
     _delim: PhantomData<Delim>,
 }
@@ -62,6 +72,8 @@ impl<T: Rule, X: TransformInto<T>, Delim: Rule, const TRAIL: bool>
     }
 }
 
+/// Parse an _optional_ `S` before the target rule and discard the result if found.
+/// Useful for ignoring optional whitespace before the target rule.
 pub struct ignore_before<S> {
     _space: PhantomData<S>,
 }
@@ -74,6 +86,8 @@ impl<T: Rule, S: Rule> TransformInto<T> for ignore_before<S> {
     }
 }
 
+/// Parse an _optional_ `S` after the target rule and discard the result if found.
+/// Useful for ignoring optional whitespace after the target rule.
 pub struct ignore_after<S> {
     _space: PhantomData<S>,
 }
@@ -86,8 +100,12 @@ impl<T: Rule, S: Rule> TransformInto<T> for ignore_after<S> {
     }
 }
 
+/// Parse an _optional_ `S1` before and `S2` after the target rule and discard the results if found.
+/// Useful for ignoring optional whitespace around the target rule.
 pub type ignore_around<S1, S2 = S1> = compose<ignore_before<S1>, ignore_after<S2>>;
 
+/// Parse a _required_ `S` before the target rule and discard the result.
+/// Useful for matching punctuation before the target rule.
 pub struct discard_before<S> {
     _space: PhantomData<S>,
 }
@@ -100,6 +118,8 @@ impl<T: Rule, S: Rule> TransformInto<T> for discard_before<S> {
     }
 }
 
+/// Parse a _required_ `S` after the target rule and discard the result.
+/// Useful for matching punctuation after the target rule.
 pub struct discard_after<S> {
     _space: PhantomData<S>,
 }
@@ -112,8 +132,12 @@ impl<T: Rule, S: Rule> TransformInto<T> for discard_after<S> {
     }
 }
 
+/// Parse a _required_ `S1` before and `S2` after the target rule and discard the results.
+/// Useful for matching punctuation around the target rule.
 pub type discard_around<S1, S2 = S1> = compose<discard_before<S1>, discard_after<S2>>;
 
+/// Apply the transformation `X` to each item in the target rule.
+/// Useful when matching a `Vec` of rules.
 pub struct for_each<X> {
     _x: PhantomData<X>,
 }
@@ -144,6 +168,7 @@ impl<
     }
 }
 
+/// Prefer to end a list rather than continue parsing items.
 #[non_exhaustive]
 pub struct prefer_short<const PREFER_SHORT: bool = true> {}
 
@@ -172,6 +197,7 @@ impl<
     }
 }
 
+/// Parse as a single token for lookahead purposes.
 #[non_exhaustive]
 pub struct compound_token {}
 
@@ -183,6 +209,11 @@ impl<T: Rule> TransformInto<T> for compound_token {
     }
 }
 
+/// Initially parse as `Outer`.
+/// If `Outer` successfully parses, parse the target rule over the section matched by `Outer`.
+/// Discard the parsed `Outer`.
+///
+/// If you wish to keep both the inner and outer parses, see [DualParse].
 pub struct parse_as<Outer> {
     _outer: PhantomData<Outer>,
 }
@@ -195,6 +226,7 @@ impl<Outer: Rule, Inner: Rule> TransformInto<Inner> for parse_as<Outer> {
     }
 }
 
+/// Rejects if the section matched by the target rule starts with `Invalid`.
 pub struct not<Invalid> {
     _invalid: PhantomData<Invalid>,
 }

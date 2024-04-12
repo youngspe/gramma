@@ -148,10 +148,9 @@ macro_rules! _define_token_regex {
         }
 
         fn print_debug(src: &str, range: $crate::parse::LocationRange, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-            f.write_fmt(::core::format_args!(
-                ::core::concat!("<",::core::stringify!($Name), " {:?}>"),
-                &src[range.start.position..range.end.position]
-            ))
+            let name = ::core::stringify!($Name);
+            let slice = range.slice(src);
+            f.write_fmt(::core::format_args!("<{name} {slice:?}>"))
         }
     };
 }
@@ -212,14 +211,9 @@ macro_rules! _define_token {
         }
 
         fn print_debug(src: &str, range: $crate::parse::LocationRange, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-            f.write_fmt(::core::format_args!(
-                ::core::concat!(::core::stringify!($Name), "({:?})"),
-                &src[range.start.position..range.end.position]
-            ))
-        }
-
-        fn print_display(_: &str, _: $crate::parse::LocationRange, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-            f.write_str(::core::stringify!($Name))
+            let name = ::core::stringify!($Name);
+            let slice = range.slice(src);
+            f.write_fmt(::core::format_args!("<{name} {slice:?}>"))
         }
     };
     (@try_lex $Name:ident ($type:ident $($rest:tt)*)) => {

@@ -75,6 +75,7 @@ impl<'m, B: Borrow<str>> MatchString<'m> for Exactly<'m, B> {
     }
 }
 
+/// Matches an exact string.
 pub fn exactly<'m, B: Borrow<str>>(value: B) -> StringPattern<Exactly<'m, B>> {
     StringPattern::new(Exactly {
         value,
@@ -117,22 +118,27 @@ impl<'m> MatchString<'m> for Empty<'m> {
     }
 }
 
+/// Matches the empty string.
 pub fn empty<'m>() -> StringPattern<Empty<'m>> {
     StringPattern::new(Empty { links: default() })
 }
 
+/// Matches the start of a line.
 pub fn line_start<'m>() -> StringPattern<impl IntoMatchString> {
     follows(char('\n'))
 }
 
+/// Matches the end of a line.
 pub fn line_end<'m>() -> StringPattern<impl IntoMatchString> {
     precedes(exactly("\r\n") | char('\n'))
 }
 
+/// Matches the start of the source string.
 pub fn src_start<'m>() -> StringPattern<impl IntoMatchString> {
     !follows(char(..))
 }
 
+/// Matches the end of the source string.
 pub fn src_end<'m>() -> StringPattern<impl IntoMatchString> {
     !precedes(char(..))
 }

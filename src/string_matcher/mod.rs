@@ -1,3 +1,5 @@
+#![doc = include_str!("mod.md")]
+
 mod basic_matchers;
 mod char_matcher;
 mod machine;
@@ -7,6 +9,7 @@ mod operators;
 mod repeat;
 mod traits;
 
+pub use crate::{string_matcher, string_pattern};
 pub(crate) use machine::StringMatcherContext;
 pub(crate) use objects::{Link, Links, Matcher};
 pub(crate) use patterns::*;
@@ -18,6 +21,8 @@ use crate::utils::default;
 use core::{cell::Cell, fmt, ops::Range};
 
 pub mod patterns {
+    //! A prelude of sorts for string patterns.
+    //! This module contains all predefined [MatchString](super::MatchString) implementations
     pub use super::{
         basic_matchers::{empty, exactly, line_end, line_start, src_end, src_start},
         char_matcher::{
@@ -100,7 +105,6 @@ impl<'m, M: MatchString<'m> + ?Sized> StringMatcher<M> {
         cx.move_to(start);
 
         let status = cx.run_matcher(&*self.inner);
-        cx.execute(status)
-            .then(|| start..cx.position())
+        cx.execute(status).then(|| start..cx.position())
     }
 }

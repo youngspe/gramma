@@ -1,3 +1,6 @@
+#[allow(unused)]
+use crate::ast::transform::*;
+
 #[doc(hidden)]
 #[macro_export]
 macro_rules! _into_pairs {
@@ -396,11 +399,57 @@ macro_rules! _define_rule {
     };
 }
 
+#[doc = include_str!("define_rule.md")]
 #[macro_export]
 macro_rules! define_rule {
     ($(
         $(#$attr:tt)*
-        $vis:vis $kind:ident $Name:ident {$($x:tt)*}
+        $vis:vis struct $Name:ident {
+            $(
+                $(#$field_attr:tt)*
+                $field_vis:vis $field:ident
+            ),* $(,)?
+        }
+    )*) => {$(
+        $crate::_define_rule! {
+            $(#$attr)*
+            $vis struct $Name { $(
+                $(#$field_attr)*
+                $field_vis $field,
+            )* }
+        }
+    )*};
+
+    ($(
+        $(#$attr:tt)*
+        $vis:vis enum $Name:ident {
+            $(
+                $(#$variant_attr:tt)*
+                $Variant:ident {
+                    $(
+                        $(#$field_attr:tt)*
+                        $field_vis:vis $field:ident
+                    ),* $(,)?
+                }
+            ),* $(,)?
+        }
+    )*) => {$(
+        $crate::_define_rule! {
+            $(#$attr)*
+            $vis enum $Name { $(
+                $($variant_attr)*
+                $Variant { $(
+                    $(#$field_attr)*
+                    $field_vis $field,
+                )* },
+            )* }
+        }
+    )*};
+
+    // Can accept either struct or enum; the above forms are mostly for illustrative purposes
+    ($(
+        $(#$attr:tt)*
+        $vis:vis $kind:ident $Name:ident { $($x:tt)* }
     )*) => {$(
         $crate::_define_rule! {
             $(#$attr)*

@@ -1,9 +1,10 @@
 [package]
 name = "gramma"
-version = "0.2.18"
+version = "0.2.19"
 edition = "2021"
 description = "Generate a scannerless parser by declaring types."
 license = "MIT"
+repository = "https://github.com/youngspe/gramma"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

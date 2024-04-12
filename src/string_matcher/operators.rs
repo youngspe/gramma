@@ -314,6 +314,18 @@ where
     }
 }
 
+/// Tests whether the given matcher matches starting at the current location
+/// without changing the current location.
+///
+/// #Example
+///
+/// ```
+/// # use gramma::string_matcher;
+///
+/// string_matcher!(precedes(exactly("bar"))).match_string(3, "foobar").unwrap();
+/// // `precedes` can be negated:
+/// string_matcher!(!precedes(exactly("foo"))).match_string(3, "foobar").unwrap();
+/// ```
 pub fn precedes<'m, M: IntoMatchString>(
     matcher: StringPattern<M>,
 ) -> StringPattern<Lookaround<'m, M, false, false>> {
@@ -323,6 +335,18 @@ pub fn precedes<'m, M: IntoMatchString>(
     })
 }
 
+/// Tests whether the given matcher matches ending at the current location
+/// without changing the current location.
+///
+/// #Example
+///
+/// ```
+/// # use gramma::string_matcher;
+///
+/// string_matcher!(follows(exactly("foo"))).match_string(3, "foobar").unwrap();
+/// // `follows` can be negated:
+/// string_matcher!(!follows(exactly("bar"))).match_string(3, "foobar").unwrap();
+/// ```
 pub fn follows<'m, M: IntoMatchString>(
     matcher: StringPattern<M>,
 ) -> StringPattern<Lookaround<'m, M, true, false>> {

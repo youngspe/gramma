@@ -1,3 +1,21 @@
+#[allow(unused)]
+use crate::string_matcher::{patterns, StringMatcher, StringPattern};
+
+/// Creates a [StringMatcher] from the given [StringPattern].
+/// Approximately a shorthand for `&string_pattern(pattern).matcher()`.
+///
+/// Matchers are self-referential, so the output can't be moved after it's created.
+/// All predefined patterns in the [patterns] module are brought into scope for the pattern expression.
+///
+/// # Example
+///
+/// ```
+/// let quotes_matcher = gramma::string_matcher!(
+///     char('"') + char(..).repeat(..).lazy() + !follows(char('\\')) + char('"')
+/// );
+///
+/// assert!(quotes_matcher.match_string(4, r#"s = "hello, \"world\"!";"#).is_some());
+/// ```
 #[macro_export]
 macro_rules! string_matcher {
     ($expr:expr $(,)?) => {
@@ -8,6 +26,19 @@ macro_rules! string_matcher {
         }) as &$crate::string_matcher::StringMatcher<_>
     };
 }
+
+/// Compose a [StringPattern].
+/// All predefined patterns in the [patterns] module are brought into scope.
+///
+/// # Example
+///
+/// ```
+/// let quotes_pattern = gramma::string_pattern!(
+///     char('"') + char(..).repeat(..).lazy() + !follows(char('\\')) + char('"')
+/// );
+///
+/// assert!(quotes_pattern.matcher().match_string(4, r#"s = "hello, \"world\"!";"#).is_some());
+/// ```
 #[macro_export]
 macro_rules! string_pattern {
     ($expr:expr $(,)?) => {
