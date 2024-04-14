@@ -2,7 +2,7 @@
 use crate::string_matcher::{patterns, StringMatcher, StringPattern};
 
 /// Creates a [StringMatcher] from the given [StringPattern].
-/// Approximately a shorthand for `&string_pattern(pattern).matcher()`.
+/// Approximately a shorthand for `&string_pattern!(pattern).matcher()`.
 ///
 /// Matchers are self-referential, so the output can't be moved after it's created.
 /// All predefined patterns in the [patterns] module are brought into scope for the pattern expression.

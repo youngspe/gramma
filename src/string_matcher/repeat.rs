@@ -230,6 +230,7 @@ impl RepeatCount for u32 {
     }
 }
 
+/// Equivalent to [`inner.repeat(count)`](StringPattern::repeat).
 pub fn repeat<'m, M>(
     count: impl RepeatCount,
     inner: StringPattern<M>,
@@ -237,6 +238,7 @@ pub fn repeat<'m, M>(
     inner.repeat(count)
 }
 
+/// Equivalent to [`inner.repeat(..=1)`](StringPattern::repeat).
 pub fn optional<'m, M>(inner: StringPattern<M>) -> StringPattern<Repeat<'m, M>> {
     inner.optional()
 }
@@ -269,10 +271,14 @@ impl<M> StringPattern<M> {
 }
 
 impl<'m, M> StringPattern<Repeat<'m, M>> {
+    /// First attempts to match the most repetitions, then backtracks to fewer
+    /// if the rest of the pattern fails.
     pub fn greedy(mut self) -> Self {
         self.inner.style = RepeatStyle::Greedy;
         self
     }
+    /// First attempts to match the fewest repetitions, then backtracks to more
+    /// if the rest of the pattern fails.
     pub fn lazy(mut self) -> Self {
         self.inner.style = RepeatStyle::Lazy;
         self
