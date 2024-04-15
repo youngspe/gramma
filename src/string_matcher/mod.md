@@ -98,7 +98,7 @@ assert!(word_matcher.match_string(2, " .foo ").is_none());
 It can also be used to make additional assertions on part of the matched section:
 
 ```rust
-// Use a negative lookaround to ensure the number doesn't start with zero:
+// Use a negated lookaround to ensure the number doesn't start with zero:
 let decimal_matcher = gramma::string_matcher!(
     char('-').optional() + !precedes(char('0')) + ascii_digit().repeat(1..)
 );
@@ -199,8 +199,8 @@ let matcher = gramma::string_matcher!(
     char('"') + char(..).repeat(..).lazy() + char('"')
 );
 let src = r#" "Hello", "world!" "#;
-/// Lazy matches the first pair of quotes perfectly and is the ideal pattern for
-/// this source string.
+// Lazy matches the first pair of quotes perfectly and is the ideal pattern for
+// this source string.
 assert_eq!(&src[matcher.match_string(1, src).unwrap()], r#""Hello""#);
 ```
 
@@ -274,7 +274,50 @@ All sub-patterns must match at the current source location for the intersection
 to match.
 
 ```rust
-// TODO:
+// Accept any letter but 'x':
+let matcher = gramma::string_matcher!(alphabetic() & !char('x'));
+
+// Matches both alphabetic() and !char('x'):
+assert!(matcher.match_string(0, "a").is_some());
+// Matches alphabetic() but not !char('x'):
+assert!(matcher.match_string(0, "x").is_none());
+// Matches !char('x') but not alphabetic():
+assert!(matcher.match_string(0, "?").is_none());
 ```
 
 ## Negate
+
+The `!` operator <dfn>negates</dfn> the following pattern,
+meaning it matches when the inner pattern doesn't and vice versa.
+Two kinds of patterns can be negated:
+
+- `char`
+- Lookaround
+
+No other patterns can be negated as it would be ambiguous where the current position
+in the string should be after the inner pattern fails to match.
+
+### Negated `char` patterns
+
+Given `char` pattern <code><var>A</var></code>, <code>!<var>A</var></code>
+is a `char` pattern that accepts every character <code><var>A</var></code>
+rejects and rejects every character <code><var>A</var></code> accepts.
+
+For example:
+
+- `!whitespace()` matches every non-whitespace character
+- `!char('x')` matches any character except for 'x'
+- `!char((whitespace(), alphabetic()))` matches any character that is neither
+    whitespace nor a letter. It could also be represented as `!whitespace() & !alphabetic()`
+
+
+
+### Negated `lookaround` patterns
+
+Given pattern <code><var>A</var></code>:
+- <code>!precedes(<var>A</var>)</code>
+    accepts the beginning of any string <code><var>A</var></code> rejects,
+    and rejects the beginning of any string <code><var>A</var></code> accepts.
+- <code>!follows(<var>A</var>)</code>
+    accepts the end of any string <code><var>A</var></code> rejects,
+    and rejects the end of any string <code><var>A</var></code> accepts.
