@@ -141,8 +141,8 @@ impl<'m, D: BoundaryDef> MatchString<'m> for Boundary<'m, D> {
         cx.run_next(self)
     }
 
-    fn links(&'m self) -> Links<'m> {
-        (&self.links).into()
+    fn links(&'m self) -> Option<Links<'m>> {
+        Some((&self.links).into())
     }
 
     fn fmt_matcher(&self, f: &mut fmt::Formatter, _: crate::string_matcher::DebugPrecedence) -> fmt::Result {

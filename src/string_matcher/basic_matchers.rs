@@ -26,19 +26,29 @@ impl<B: Borrow<str>> IntoMatchString for Exactly<'_, B> {
     }
 }
 
-impl<'m, B: Borrow<str>> MatchString<'m> for Exactly<'m, B> {
-    fn match_string(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> Option<bool> {
+impl<'m, B: Borrow<str>> Exactly<'m, B> {
+    fn match_exact(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
         let value = self.value.borrow();
         if cx.is_reversed() {
             if !cx.pre().ends_with(value) {
-                return Some(false);
+                return false;
             }
             cx.back_by(value.len());
         } else {
             if !cx.post().starts_with(value) {
-                return Some(false);
+                return false;
             }
             cx.forward_by(value.len());
+        }
+
+        true
+    }
+}
+
+impl<'m, B: Borrow<str>> MatchString<'m> for Exactly<'m, B> {
+    fn match_string(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> Option<bool> {
+        if !self.match_exact(cx) {
+            return Some(false);
         }
 
         cx.run_next(self)
@@ -54,8 +64,8 @@ impl<'m, B: Borrow<str>> MatchString<'m> for Exactly<'m, B> {
         chars.next().is_none().then_some(char(ch))
     }
 
-    fn links(&'m self) -> Links<'m> {
-        (&self.links).into()
+    fn links(&'m self) -> Option<Links<'m>> {
+        Some((&self.links).into())
     }
 
     fn fmt_matcher(
@@ -66,12 +76,16 @@ impl<'m, B: Borrow<str>> MatchString<'m> for Exactly<'m, B> {
         fmt::Debug::fmt(self.value.borrow(), f)
     }
 
-    fn should_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
-        if cx.is_reversed() {
-            cx.pre().ends_with(self.value.borrow())
-        } else {
-            cx.post().starts_with(self.value.borrow())
+    fn quick_test(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> Option<bool> {
+        if !self.match_exact(cx) {
+            return Some(false);
         }
+
+        let Some(next) = self.next_matcher(cx.is_reversed()) else {
+            return Some(true);
+        };
+
+        cx.quick_test_matcher(next, 1)
     }
 }
 
@@ -105,16 +119,16 @@ impl<'m> MatchString<'m> for Empty<'m> {
         cx.run_next(self)
     }
 
-    fn links(&'m self) -> Links<'m> {
-        (&self.links).into()
+    fn links(&'m self) -> Option<Links<'m>> {
+        Some((&self.links).into())
     }
 
     fn first(&'m self) -> Matcher<'m> {
-        self.next_link().get().unwrap_or(self.into())
+        self.forward_matcher().unwrap_or(self.into())
     }
 
     fn last(&'m self) -> Matcher<'m> {
-        self.prev_link().get().unwrap_or(self.into())
+        self.backward_matcher().unwrap_or(self.into())
     }
 }
 

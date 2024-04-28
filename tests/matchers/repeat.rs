@@ -3,10 +3,20 @@ use gramma::string_matcher;
 use super::test_matches;
 
 #[test]
-fn fixed_repeat_zero() {
+fn fixed_repeat_zero_greedy() {
     let src = "foo bar baz";
     test_matches(src, string_matcher!(exactly("foo").repeat(0)), 4, 4);
+}
+
+#[test]
+fn fixed_repeat_zero_lazy() {
+    let src = "foo bar baz";
     test_matches(src, string_matcher!(exactly("foo").repeat(0).lazy()), 4, 4);
+}
+
+#[test]
+fn fixed_repeat_zero_simple() {
+    let src = "foo bar baz";
     test_matches(
         src,
         string_matcher!(exactly("foo").repeat(0).simple()),
@@ -308,11 +318,9 @@ fn nested_repeat_lazy() {
     let src = "foo bar baz qux? foo";
     test_matches(
         src,
-        string_matcher!(
-            (whitespace().repeat(..) + alphabetic().repeat(1..))
-                .repeat(2..)
-                .lazy()
-        ),
+        string_matcher!((whitespace().repeat(..) + alphabetic().repeat(1..))
+            .repeat(2..)
+            .lazy()),
         0,
         7,
     );
@@ -382,11 +390,7 @@ fn char_repeat_greedy() {
     let src = "baccbaabcbxbac";
     test_matches(
         src,
-        string_matcher!(
-            repeat(.., char('a') | char('b') | char('c'))
-                .greedy()
-                + char('x')
-        ),
+        string_matcher!(repeat(.., char('a') | char('b') | char('c')).greedy() + char('x')),
         0,
         11,
     );
@@ -397,11 +401,7 @@ fn char_repeat_lazy() {
     let src = "baccbaabcbxbac";
     test_matches(
         src,
-        string_matcher!(
-            repeat(.., char('a') | char('b') | char('c'))
-                .lazy()
-                + char('x')
-        ),
+        string_matcher!(repeat(.., char('a') | char('b') | char('c')).lazy() + char('x')),
         0,
         11,
     );
@@ -412,12 +412,108 @@ fn char_repeat_simple() {
     let src = "baccbaabcbxbac";
     test_matches(
         src,
-        string_matcher!(
-            repeat(.., char('a') | char('b') | char('c'))
-                .simple()
-                + char('x')
-        ),
+        string_matcher!(repeat(.., char('a') | char('b') | char('c')).simple() + char('x')),
         0,
         11,
     );
+}
+#[test]
+fn negative_lookahead_in_simple_list() {
+    test_matches(
+        "aaab",
+        string_matcher!(repeat(1.., char('a') + !precedes(char('b'))).simple()),
+        0,
+        2,
+    );
+}
+
+#[test]
+fn follows_after_repeat_lazy() {
+    test_matches(
+        r#"abb\a "#,
+        string_matcher!(char('a') + char(..).repeat(..).lazy() + follows(char('\\')) + char('a')),
+        0,
+        5,
+    )
+}
+
+#[test]
+fn negative_follows_after_repeat_lazy() {
+    test_matches(
+        r#"abbba "#,
+        string_matcher!(char('a') + char(..).repeat(..).lazy() + !follows(char('\\')) + char('a')),
+        0,
+        5,
+    )
+}
+
+#[test]
+fn follows_after_repeat_greedy() {
+    test_matches(
+        r#"abb\a "#,
+        string_matcher!(char('a') + char(..).repeat(..).greedy() + follows(char('\\')) + char('a')),
+        0,
+        5,
+    )
+}
+
+#[test]
+fn negative_follows_after_repeat_greedy() {
+    test_matches(
+        r#"abbba "#,
+        string_matcher!(
+            char('a') + char(..).repeat(..).greedy() + !follows(char('\\')) + char('a')
+        ),
+        0,
+        5,
+    )
+}
+
+pub mod negative_precedes_in_repeat {
+    use super::*;
+    macro_rules! define {
+        ($name:ident = ($src:expr, $style_inner:ident, $style_outer:ident $(,)?) >> ($start:expr, $end:expr)) => {
+            #[test]
+            fn $name() {
+                test_matches(
+                    $src,
+                    string_matcher!(
+                        char('<')
+                            + repeat(
+                                1..,
+                                whitespace().repeat(..).simple()
+                                    + (alphanumeric()
+                                        | !char((whitespace(), alphanumeric(), char('>')))
+                                            + !precedes(char('>')))
+                                    .repeat(1..)
+                                    .$style_inner()
+                            )
+                            .$style_outer()
+                            + precedes(char(':').optional() + char('>'))
+                    ),
+                    $start,
+                    $end,
+                )
+            }
+        };
+    }
+
+    macro_rules! define_set {
+        ($name:ident = ($src:expr) >> ($start:expr, $end:expr)) => {
+            mod $name {
+                use super::*;
+                define!(greedy_greedy = ($src, greedy, greedy) >> ($start, $end));
+                define!(greedy_lazy = ($src, greedy, lazy) >> ($start, $end));
+                define!(greedy_simple = ($src, greedy, simple) >> ($start, $end));
+                define!(lazy_greedy = ($src, lazy, greedy) >> ($start, $end));
+                define!(lazy_lazy = ($src, lazy, lazy) >> ($start, $end));
+                define!(lazy_simple = ($src, lazy, simple) >> ($start, $end));
+                define!(simple_greedy = ($src, simple, greedy) >> ($start, $end));
+                define!(simple_lazy = ($src, simple, lazy) >> ($start, $end));
+                define!(simple_simple = ($src, simple, simple) >> ($start, $end));
+            }
+        };
+    }
+    define_set!(match_symbol = (" <foo bar baxz:baz x:> ") >> (1, 20));
+    define_set!(match_letter = (" <foo barx baz:bxaz> x ") >> (1, 19));
 }

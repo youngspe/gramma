@@ -3,14 +3,13 @@ use core::{cell::Cell, convert::Infallible, fmt};
 use crate::utils::DebugFn;
 
 use super::{
-    char_matcher::MatchChar, machine::StringMatcherState, Link, Links, Matcher,
+    char_matcher::MatchChar, machine::StringMatcherState, Links, Matcher,
     StringMatcherContext,
 };
 
 pub trait AsMatcher<'m> {
     fn _as_matcher(&'m self) -> Matcher<'m>;
-    fn _should_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool;
-    fn _smart_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool;
+    fn _quick_test(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> Option<bool>;
 }
 
 pub trait IntoMatchString {
@@ -60,26 +59,50 @@ pub trait MatchString<'m>: AsMatcher<'m> {
         Some(true)
     }
 
-    fn should_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
-        self._should_push(cx)
+    fn quick_test(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> Option<bool> {
+        self._quick_test(cx)
     }
 
-    /// Returns true if items were pushed that might require a reset
-    fn smart_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
-        self._smart_push(cx)
+    fn should_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
+        self.quick_test(cx).unwrap_or(true)
     }
 
     fn as_matcher(&'m self) -> Matcher<'m> {
         self._as_matcher()
     }
 
-    fn links(&'m self) -> Links<'m>;
-    fn prev_link(&'m self) -> &'m Link<'m> {
-        self.links().0
+    fn links(&'m self) -> Option<Links<'m>> {
+        None
     }
-    fn next_link(&'m self) -> &'m Link<'m> {
-        self.links().1
+
+    fn backward_matcher(&'m self) -> Option<Matcher<'m>> {
+        self.links()?.0.get()
     }
+
+    fn forward_matcher(&'m self) -> Option<Matcher<'m>> {
+        self.links()?.1.get()
+    }
+
+    fn set_backward(&'m self, matcher: Option<Matcher<'m>>) {
+        if let Some(Links(back, _)) = self.links() {
+            back.set(matcher)
+        }
+    }
+
+    fn set_forward(&'m self, matcher: Option<Matcher<'m>>) {
+        if let Some(Links(_, fwd)) = self.links() {
+            fwd.set(matcher)
+        }
+    }
+
+    fn next_matcher(&'m self, is_reversed: bool) -> Option<Matcher<'m>> {
+        if is_reversed {
+            self.backward_matcher()
+        } else {
+            self.forward_matcher()
+        }
+    }
+
     fn first(&'m self) -> Matcher<'m> {
         self.into()
     }

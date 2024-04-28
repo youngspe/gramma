@@ -25,6 +25,7 @@ pub fn simple_add_miss() {
 pub fn simple_or_match() {
     let matcher = string_matcher!(exactly("foo") | exactly("bar"));
     test_matches("bar", matcher, 0, 3);
+    test_matches("foobar", matcher, 0, 3);
     test_matches("foobar", matcher, 3, 6);
 }
 

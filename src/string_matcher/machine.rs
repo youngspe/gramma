@@ -3,7 +3,6 @@ use smallvec::SmallVec;
 use crate::utils::default;
 
 use super::char_matcher::MatchChar;
-use super::Link;
 use super::MatchString;
 use super::Matcher;
 
@@ -139,6 +138,11 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
         self
     }
 
+    pub(crate) fn push(&mut self, item: StackItem<'m>) -> &mut Self {
+        self.stack.push(item);
+        self
+    }
+
     pub(crate) fn push_matcher_internal(&mut self, matcher: Matcher<'m>) -> &mut Self {
         self.stack.push(StackItem::Matcher { matcher });
         self
@@ -153,105 +157,104 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
         })
     }
 
-    pub fn smart_push_matcher(&mut self, matcher: impl Into<Matcher<'m>>) -> bool {
+    pub fn quick_test_matcher(
+        &mut self,
+        matcher: impl Into<Matcher<'m>>,
+        depth_incr: u16,
+    ) -> Option<bool> {
         if self.depth >= MAX_DEPTH {
-            self.push_matcher(matcher);
-            return true;
+            return None;
         }
+        let old_state = self.state();
         let old_depth = self.depth;
-        self.depth = (self.depth + 1).max(MAX_DEPTH - MAX_SMART_PUSH_DEPTH);
+        self.depth = (self.depth + depth_incr).max(MAX_DEPTH - MAX_SMART_PUSH_DEPTH);
         let matcher: Matcher<'m> = matcher.into();
-        let out = if self.is_reversed() {
-            matcher.last().smart_push(self)
-        } else {
-            matcher.first().smart_push(self)
-        };
+        let out = matcher.quick_test(self);
         self.depth = old_depth;
-        out
-    }
-
-    pub fn should_push_matcher(&mut self, matcher: impl Into<Matcher<'m>>) -> bool {
-        if self.depth >= MAX_DEPTH {
-            return true;
-        }
-        let old_depth = self.depth;
-        self.depth = (self.depth + 1).max(MAX_DEPTH - MAX_SMART_PUSH_DEPTH);
-        let matcher: Matcher<'m> = matcher.into();
-        let out = matcher.should_push(self);
-        self.depth = old_depth;
+        self.set_state(old_state);
         out
     }
 
     pub fn run_matcher(&mut self, matcher: &'m (impl MatchString<'m> + ?Sized)) -> Option<bool> {
         if self.depth >= MAX_DEPTH {
-            if !self.smart_push_matcher(matcher) {
-                return Some(false);
-            }
+            self.push_matcher(matcher);
             None
         } else {
+            let stack_len = self.stack.len();
+            let old_depth = self.depth;
+            let old_state = self.state();
             self.depth += 1;
             let out = if self.is_reversed() {
                 matcher.last().match_string(self)
             } else {
                 matcher.first().match_string(self)
             };
-            self.depth -= 1;
+            self.depth = old_depth;
+
+            if out.is_some() {
+                self.truncate_stack(stack_len);
+            }
+
+            if out == Some(false) {
+                self.set_state(old_state);
+            }
             out
         }
     }
 
-    pub fn push_link(&mut self, link: &Link<'m>) -> Option<bool> {
-        if let Some(matcher) = link.get() {
-            if self.depth >= MAX_DEPTH {
-                self.push_matcher_internal(matcher);
-            } else {
-                self.depth += 1;
-                let out = matcher.smart_push(self);
-                self.depth -= 1;
-                if !out {
-                    return Some(false);
-                }
-            }
-            None
-        } else {
-            Some(true)
-        }
+    pub fn quick_run_matcher(
+        &mut self,
+        matcher: &'m (impl MatchString<'m> + ?Sized),
+    ) -> Option<bool> {
+        let old_depth = self.depth;
+        self.depth = self.depth.max(MAX_DEPTH - MAX_SMART_PUSH_DEPTH - 1);
+        let out = self.run_matcher(matcher);
+        self.depth = old_depth;
+        out
     }
 
-    pub fn run_link(&mut self, link: &Link<'m>) -> Option<bool> {
-        if let Some(matcher) = link.get() {
-            self.run_matcher(*matcher)
-        } else {
-            Some(true)
+    pub fn push_alternate(
+        &mut self,
+        matcher: &'m (impl MatchString<'m> + ?Sized),
+    ) -> (Option<bool>, StringMatcherState) {
+        let old_state = self.state();
+        let res = self.quick_run_matcher(matcher);
+
+        if res == Some(false) {
+            return (res, old_state);
         }
+
+        if res == Some(true) {
+            self.stack.push(StackItem::Accept);
+        }
+
+        self.push_reset();
+
+        let out_state = self.state();
+        self.set_state(old_state);
+        (res, out_state)
     }
 
-    pub fn push_next(&mut self, current: &'m (impl MatchString<'m> + ?Sized)) -> Option<bool> {
-        self.push_link(if self.is_reversed() {
-            current.prev_link()
-        } else {
-            current.next_link()
-        })
+    pub fn select_alternate(
+        &mut self,
+        primary: Option<bool>,
+        alternate: (Option<bool>, StringMatcherState),
+    ) -> Option<bool> {
+        let (secondary, state) = alternate;
+
+        if primary != Some(false) {
+            return primary;
+        }
+
+        self.set_state(state);
+        secondary
     }
 
     pub fn run_next(&mut self, current: &'m (impl MatchString<'m> + ?Sized)) -> Option<bool> {
-        self.run_link(if self.is_reversed() {
-            current.prev_link()
-        } else {
-            current.next_link()
-        })
-    }
-
-    pub fn push_next_or_accept(
-        &mut self,
-        current: &'m (impl MatchString<'m> + ?Sized),
-    ) -> &mut Self {
-        match self.push_next(current) {
-            Some(true) => self.stack.push(StackItem::Accept),
-            Some(false) => self.stack.push(StackItem::Reject),
-            None => {}
+        match current.next_matcher(self.is_reversed()) {
+            Some(matcher) => self.run_matcher(*matcher),
+            None => Some(true),
         }
-        self
     }
 
     pub fn push_frame(
@@ -271,7 +274,9 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
 
     pub(crate) fn push_state(&mut self, new_state: StringMatcherState) -> &mut Self {
         match self.stack.last_mut() {
-            Some(StackItem::Reset { state }) => *state = new_state,
+            Some(StackItem::Reset { .. }) => {
+                // the earlier reset would override the new one when popping off the stack
+            }
             _ => self.stack.push(StackItem::Reset { state: new_state }),
         }
         self
@@ -334,49 +339,40 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
         (outer, inner)
     }
 
-    pub(crate) fn should_repeat(
+    pub(crate) fn quick_test_repeat(
         &mut self,
         outer: StackItem<'m>,
         inner: StackItem<'m>,
-        greedy: bool,
         depth: u32,
         min: u32,
         max: u32,
-    ) -> bool {
-        enum Part {
-            Outer,
-            Inner,
-        }
-
-        use Part::*;
-
-        let order = if greedy {
-            [Inner, Outer]
+        depth_incr: u16,
+    ) -> Option<bool> {
+        let test1 = if depth >= min {
+            self.quick_test_stack_item(inner, depth_incr)
         } else {
-            [Outer, Inner]
+            Some(false)
         };
 
-        for part in order {
-            match part {
-                Outer => {
-                    if depth >= min && self.should_push_stack_item(outer) {
-                        return true;
-                    }
-                }
-                Inner => {
-                    if depth < max && self.should_push_stack_item(inner) {
-                        return true;
-                    }
-                }
-            }
+        if test1 == Some(true) {
+            return Some(true);
         }
 
-        return false;
-    }
+        let test2 = if depth < max {
+            self.quick_test_stack_item(outer, depth_incr)
+        } else {
+            Some(false)
+        };
 
+        match (test1, test2) {
+            (_, Some(true)) => Some(true),
+            (Some(false), Some(false)) => Some(false),
+            _ => None,
+        }
+    }
     pub(crate) fn continue_repeat(&mut self) -> Option<bool> {
-        let repeat = self.state().repeat;
         let (outer, inner) = self.get_repeat_parts();
+        let repeat = self.state().repeat;
 
         let use_outer = repeat.depth >= repeat.min;
         let use_inner = repeat.depth < repeat.max;
@@ -391,24 +387,25 @@ impl<'m, 'data> StringMatcherContext<'m, 'data> {
         };
 
         match (use_outer, use_inner) {
-            (true, true) if repeat.greedy => {
-                if self.smart_push_stack_item(outer) {
-                    self.push_state(outer_state);
-                }
-                self.stack.push(outer);
-                self.push_state(outer_state);
-                match self.set_state(inner_state).run_stack_item(inner) {
-                    Some(false) => None,
-                    out => out,
-                }
-            }
             (true, true) => {
-                if self.smart_push_stack_item(inner) {
-                    self.push_state(inner_state);
+                let ((option1, state1), (option2, state2)) = if repeat.greedy {
+                    ((inner, inner_state), (outer, outer_state))
+                } else {
+                    ((outer, outer_state), (inner, inner_state))
+                };
+
+                let option2_out = self.set_state(state2).quick_test_stack_item(option2, 1);
+
+                if option2_out != Some(false) {
+                    self.push(option2).push_state(state2);
                 }
-                match self.set_state(outer_state).run_stack_item(outer) {
-                    Some(false) => None,
-                    out => out,
+
+                let option1_out = self.set_state(state1).run_stack_item(option1);
+
+                match (option1_out, option2_out) {
+                    (Some(true), _) => Some(true),
+                    (Some(false), Some(false)) => Some(false),
+                    _ => None,
                 }
             }
             (true, false) => self.set_state(outer_state).run_stack_item(outer),
@@ -519,7 +516,6 @@ pub(crate) enum RepeatStyle {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum StackItem<'m> {
     Accept,
-    Reject,
     Noop,
     Panic(&'m str),
     Pop {
@@ -635,9 +631,6 @@ impl<'m> StringMatcherContext<'m, '_> {
     fn run_stack_item(&mut self, item: StackItem<'m>) -> Option<bool> {
         match item {
             StackItem::Accept => Some(true),
-            StackItem::Reject => Some(false),
-            StackItem::Noop => None,
-            StackItem::Panic(s) => panic!("{s}"),
             StackItem::Matcher { matcher } => self.run_matcher(*matcher),
             item => {
                 self.stack.push(item);
@@ -646,22 +639,11 @@ impl<'m> StringMatcherContext<'m, '_> {
         }
     }
 
-    fn smart_push_stack_item(&mut self, item: StackItem<'m>) -> bool {
+    fn quick_test_stack_item(&mut self, item: StackItem<'m>, depth_incr: u16) -> Option<bool> {
         match item {
-            StackItem::Reject => false,
-            StackItem::Matcher { matcher } => self.smart_push_matcher(matcher),
-            item => {
-                self.stack.push(item);
-                true
-            }
-        }
-    }
-
-    fn should_push_stack_item(&mut self, item: StackItem<'m>) -> bool {
-        match item {
-            StackItem::Reject => false,
-            StackItem::Matcher { matcher } => self.should_push_matcher(matcher),
-            _ => true,
+            StackItem::Accept => Some(true),
+            StackItem::Matcher { matcher } => self.quick_test_matcher(matcher, depth_incr),
+            _ => None,
         }
     }
 
@@ -680,7 +662,6 @@ impl<'m> StringMatcherContext<'m, '_> {
                 *max_times = 0;
                 Some(true)
             }
-            StackItem::Reject => Some(false),
             StackItem::Noop => {
                 *max_times = 0;
                 None
@@ -704,7 +685,6 @@ impl<'m> StringMatcherContext<'m, '_> {
         let index = self.stack.len();
         match item {
             StackItem::Accept => return Some(true),
-            StackItem::Reject => return Some(false),
             StackItem::Noop => {}
             StackItem::Panic(s) => panic!("{s}"),
             StackItem::Pop { range } => self.pop_range(range),

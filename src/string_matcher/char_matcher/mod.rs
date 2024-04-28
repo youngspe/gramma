@@ -315,8 +315,8 @@ impl<'m, M: MatchChar> MatchString<'m> for CharMatcher<'m, M> {
         Some(MatchCharRef { inner: &self.inner })
     }
 
-    fn links(&'m self) -> Links<'m> {
-        (&self.links).into()
+    fn links(&'m self) -> Option<Links<'m>> {
+        Some((&self.links).into())
     }
 
     fn fmt_matcher(&self, f: &mut fmt::Formatter, _: DebugPrecedence) -> fmt::Result {

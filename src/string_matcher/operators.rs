@@ -7,6 +7,7 @@ use crate::utils::default;
 
 use super::{
     char_matcher::MatchChar,
+    machine::StackItem,
     traits::{IntersectPattern, IntoMatchString, NegatePattern},
     DebugPrecedence, Link, MatchString, StringPattern,
 };
@@ -47,23 +48,27 @@ where
         }
     }
 
-    fn links(&'m self) -> super::Links<'m> {
-        super::Links(self.prev_link(), self.next_link())
+    fn backward_matcher(&'m self) -> Option<super::Matcher<'m>> {
+        self.matcher1.backward_matcher()
     }
 
-    fn prev_link(&'m self) -> &'m Link<'m> {
-        self.matcher1.prev_link()
+    fn forward_matcher(&'m self) -> Option<super::Matcher<'m>> {
+        self.matcher2.forward_matcher()
     }
 
-    fn next_link(&'m self) -> &'m Link<'m> {
-        self.matcher2.next_link()
+    fn set_backward(&'m self, matcher: Option<super::Matcher<'m>>) {
+        self.matcher1.set_backward(matcher)
+    }
+
+    fn set_forward(&'m self, matcher: Option<super::Matcher<'m>>) {
+        self.matcher2.set_forward(matcher)
     }
 
     fn initialize(&'m self) {
-        self.matcher1.next_link().set(self.matcher2.first());
+        self.matcher1.set_forward(self.matcher2.first().into());
         self.matcher1.initialize();
 
-        self.matcher2.prev_link().set(self.matcher1.last());
+        self.matcher2.set_backward(self.matcher1.last().into());
         self.matcher2.initialize();
     }
 
@@ -76,19 +81,11 @@ where
         })
     }
 
-    fn should_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
+    fn quick_test(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> Option<bool> {
         if cx.is_reversed() {
-            self.matcher2.should_push(cx)
+            self.matcher2.quick_test(cx)
         } else {
-            self.matcher1.should_push(cx)
-        }
-    }
-
-    fn smart_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
-        if cx.is_reversed() {
-            self.matcher2.smart_push(cx)
-        } else {
-            self.matcher1.smart_push(cx)
+            self.matcher1.quick_test(cx)
         }
     }
 }
@@ -138,40 +135,45 @@ where
                 return Some(false);
             }
 
-            return cx.run_next(&self.matcher1);
+            return cx.run_next(self);
         }
 
-        if cx.smart_push_matcher(&self.matcher2) {
-            cx.push_reset();
+        let alt = cx.push_alternate(&self.matcher2);
+        let primary = cx.run_matcher(&self.matcher1);
+        cx.select_alternate(primary, alt)
+    }
+
+    fn quick_test(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> Option<bool> {
+        let state = cx.state();
+        let test1 = self.matcher1.quick_test(cx);
+        if test1 == Some(true) {
+            return Some(true);
         }
-
-        match cx.run_matcher(&self.matcher1) {
-            Some(false) => None,
-            out => out,
+        cx.set_state(state);
+        let test2 = self.matcher2.quick_test(cx);
+        match (test1, test2) {
+            (_, Some(true)) => Some(true),
+            (Some(false), Some(false)) => Some(false),
+            _ => None,
         }
     }
 
-    fn should_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
-        self.matcher1.should_push(cx) || self.matcher2.should_push(cx)
+    fn backward_matcher(&'m self) -> Option<super::Matcher<'m>> {
+        self.matcher1.backward_matcher()
     }
 
-    fn smart_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
-        if cx.smart_push_matcher(&self.matcher2) {
-            cx.push_reset();
-        }
-        cx.smart_push_matcher(&self.matcher1)
+    fn forward_matcher(&'m self) -> Option<super::Matcher<'m>> {
+        self.matcher2.forward_matcher()
     }
 
-    fn links(&'m self) -> super::Links<'m> {
-        self.matcher1.links()
+    fn set_backward(&'m self, matcher: Option<super::Matcher<'m>>) {
+        self.matcher1.set_backward(matcher);
+        self.matcher2.set_backward(matcher);
     }
 
-    fn prev_link(&'m self) -> &'m Link<'m> {
-        self.matcher1.prev_link()
-    }
-
-    fn next_link(&'m self) -> &'m Link<'m> {
-        self.matcher1.next_link()
+    fn set_forward(&'m self, matcher: Option<super::Matcher<'m>>) {
+        self.matcher1.set_forward(matcher);
+        self.matcher2.set_forward(matcher);
     }
 
     fn as_char_matcher(&'m self) -> Option<impl MatchChar + 'm> {
@@ -183,9 +185,6 @@ where
 
     fn initialize(&'m self) {
         self.matcher1.initialize();
-
-        self.matcher2.prev_link().set(self.prev_link().get());
-        self.matcher2.next_link().set(self.next_link().get());
         self.matcher2.initialize();
     }
 
@@ -265,19 +264,49 @@ where
 {
     fn match_string(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> Option<bool> {
         let pre_stack_len = cx.stack.len();
+        let pre_state = cx.state();
 
-        cx.push_next_or_accept(self);
-        if cx.stack.len() == pre_stack_len {
-            return Some(false);
-        }
-        cx.push_reset();
-        let (pop_ok, pop_err) = self.pop_pair(cx.stack.len() - pre_stack_len);
+        let next = self.next_matcher(cx.is_reversed());
+
+        let next_accepted;
+        let next_state;
+
+        if let Some(next) = next {
+            let (out, state) = cx.push_alternate(*next);
+            next_state = state;
+            next_accepted = match out {
+                Some(true) => true,
+                Some(false) => return Some(false),
+                None => false,
+            };
+        } else {
+            cx.push(StackItem::Accept).push_reset();
+            next_accepted = true;
+            next_state = cx.state();
+        };
+
+        let post_stack_len = cx.stack.len();
+
+        let (pop_ok, pop_err) = self.pop_pair(post_stack_len - pre_stack_len);
         cx.push_frame(pop_ok, pop_err).reverse(REVERSE);
-        cx.run_matcher(&self.inner)
+
+        let matched = cx.run_matcher(&self.inner)? ^ NEGATE;
+
+        if matched {
+            cx.truncate_stack(post_stack_len).set_state(next_state);
+            if next_accepted {
+                Some(true)
+            } else {
+                None
+            }
+        } else {
+            cx.truncate_stack(pre_stack_len).set_state(pre_state);
+            Some(false)
+        }
     }
 
-    fn links(&'m self) -> super::Links<'m> {
-        (&self.links).into()
+    fn links(&'m self) -> Option<super::Links<'m>> {
+        Some((&self.links).into())
     }
 
     fn initialize(&'m self) {
@@ -290,26 +319,23 @@ where
             .finish()
     }
 
-    fn should_push(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> bool {
-        if !NEGATE {
-            let state = cx.state();
-            let should_push_inner = self.inner.should_push(cx.reverse(REVERSE));
-            cx.set_state(state);
-            if !should_push_inner {
-                return false;
-            }
-        };
+    fn quick_test(&'m self, cx: &mut super::StringMatcherContext<'m, '_>) -> Option<bool> {
+        let old_state = cx.state();
+        let test_inner = self
+            .inner
+            .quick_test(cx.reverse(REVERSE))
+            .map(|b| b ^ NEGATE);
+        cx.set_state(old_state);
 
-        let next = if cx.is_reversed() {
-            self.prev_link().get()
-        } else {
-            self.next_link().get()
-        };
+        if test_inner == Some(false) {
+            return Some(false);
+        }
 
-        if let Some(next) = next {
-            cx.should_push_matcher(next)
-        } else {
-            true
+        let next = self.next_matcher(cx.is_reversed());
+
+        match (test_inner, next.map(|next| cx.quick_test_matcher(next, 1))) {
+            (inner, None) | (inner @ None, _) => inner,
+            (_, Some(next)) => next,
         }
     }
 }

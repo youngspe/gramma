@@ -1,8 +1,6 @@
 use core::{cell::Cell, fmt};
 
 use super::{
-    char_matcher::MatchChar,
-    machine::StackItem,
     traits::{AsMatcher, DebugPrecedence, MatchString},
     StringMatcherContext,
 };
@@ -58,28 +56,17 @@ impl<'m, M: MatchString<'m>> AsMatcher<'m> for M {
         Matcher { inner: self }
     }
 
-    fn _should_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
-        if let Some(matcher) = self.as_char_matcher() {
-            if cx.is_reversed() {
-                if !matcher.match_end(cx.pre()) {
-                    return false;
-                }
-            } else if !matcher.match_start(cx.post()) {
-                return false;
-            }
+    fn _quick_test(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> Option<bool> {
+        let matcher = self.as_char_matcher()?;
+        if !cx.match_char(&matcher) {
+            return Some(false);
         }
 
-        true
-    }
+        let Some(next) = self.next_matcher(cx.is_reversed()) else {
+            return Some(true);
+        };
 
-    fn _smart_push(&'m self, cx: &mut StringMatcherContext<'m, '_>) -> bool {
-        if self.should_push(cx) {
-            cx.stack.push(StackItem::Matcher {
-                matcher: self.into(),
-            });
-            true
-        } else {
-            false
-        }
+        let out = cx.quick_test_matcher(next, 1);
+        out
     }
 }
