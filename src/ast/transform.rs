@@ -136,6 +136,20 @@ impl<T: Rule, S: Rule> TransformInto<T> for discard_after<S> {
 /// Useful for matching punctuation around the target rule.
 pub type discard_around<S1, S2 = S1> = compose<discard_before<S1>, discard_after<S2>>;
 
+/// Apply the transformation `X` to the inner value.
+/// Useful when matching an `Option<T>` and you want the rules to apply to `T`.
+pub struct map<X> {
+    _x: PhantomData<X>,
+}
+
+impl<In: Rule, Out, X: TransformInto<Out, Input = In>> TransformInto<Option<Out>> for map<X> {
+    type Input = Option<In>;
+
+    fn transform(input: Self::Input) -> Option<Out> {
+        input.map(X::transform)
+    }
+}
+
 /// Apply the transformation `X` to each item in the target rule.
 /// Useful when matching a `Vec` of rules.
 pub struct for_each<X> {
