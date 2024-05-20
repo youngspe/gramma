@@ -122,7 +122,8 @@ pub trait Rule: Any + Debug {
 pub struct RuleObject<'lt, Cx: CxType> {
     name: fn() -> &'static str,
     print_name: fn(&mut Formatter) -> fmt::Result,
-    pre_parse: fn(ParseContext<Cx>, PreParseState, &RuleObject<Cx>) -> RuleParseResult<()>,
+    pre_parse: &'lt (dyn Fn(ParseContext<Cx>, PreParseState, &RuleObject<Cx>) -> RuleParseResult<()>
+              + 'lt),
     next: Option<&'lt Self>,
 }
 
@@ -132,7 +133,7 @@ impl<'lt, Cx: CxType> RuleObject<'lt, Cx> {
         RuleObject {
             name: T::name,
             print_name: T::print_name,
-            pre_parse: T::pre_parse::<Cx>,
+            pre_parse: &T::pre_parse::<Cx>,
             next: next.into(),
         }
     }
@@ -142,9 +143,21 @@ impl<'lt, Cx: CxType> RuleObject<'lt, Cx> {
         &RuleObject::<Cx> {
             name: T::name,
             print_name: T::print_name,
-            pre_parse: T::pre_parse,
+            pre_parse: &T::pre_parse,
             next: None,
         }
+    }
+
+    /// Replace the `pre_parse` implementation with the given function:
+    pub(crate) const fn adapt<'lt2>(
+        &self,
+        pre_parse: &'lt2 (dyn Fn(ParseContext<Cx>, PreParseState, &RuleObject<Cx>) -> RuleParseResult<()>
+                   + 'lt2),
+    ) -> RuleObject<'lt2, Cx>
+    where
+        'lt: 'lt2,
+    {
+        RuleObject { pre_parse, ..*self }
     }
 
     /// The name of the rule.
@@ -381,10 +394,10 @@ impl<T: Rule> DelegateRule for Option<T> {
         f.write_str(")?")
     }
 
-    type Inner = Either<T, Empty>;
+    type Inner = Either<NotEmpty<T>, Empty>;
 
     fn from_inner(inner: Self::Inner) -> Self {
-        inner.left()
+        inner.left().map(|x| x.value)
     }
 
     fn print_visibility(&self, _: &PrintContext) -> PrintVisibility {
@@ -1134,13 +1147,10 @@ impl Rule for LocationRange {
     where
         Self: Sized,
     {
-        let end = Location {
-            position: cx.src().len(),
-        };
         next.pre_parse(
             cx,
             PreParseState {
-                start: end,
+                start: state.end,
                 ..state
             },
         )
@@ -1168,6 +1178,45 @@ impl Rule for LocationRange {
                 .get(self.start.position..self.end.position)
                 .unwrap_or_default()
         )
+    }
+}
+
+impl Rule for alloc::string::String {
+    fn pre_parse<Cx: CxType>(
+        cx: ParseContext<Cx>,
+        state: PreParseState,
+        next: &RuleObject<Cx>,
+    ) -> RuleParseResult<()>
+    where
+        Self: Sized,
+    {
+        next.pre_parse(
+            cx,
+            PreParseState {
+                start: state.end,
+                ..state
+            },
+        )
+    }
+
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, _: &RuleObject<Cx>) -> RuleParseResult<Self>
+    where
+        Self: Sized,
+    {
+        let start = cx.location();
+        let end = Location {
+            position: cx.src().len(),
+        };
+        cx.set_location(end);
+        Ok(if cx.should_discard() {
+            default()
+        } else {
+            LocationRange { start, end }.slice(cx.src()).into()
+        })
+    }
+
+    fn print_tree(&self, _: &PrintContext, f: &mut Formatter) -> fmt::Result {
+        Debug::fmt(self, f)
     }
 }
 
@@ -1418,7 +1467,7 @@ impl<In: Rule, Out: 'static, X: TransformInto<Out, Input = In> + 'static> Delega
 type DelimitedListPrototypeTrailing<T, Delim> =
     ControlFlow<(), Partial<T, DelimitedListTailTrailing<T, Delim>>>;
 
-type DelimitedListPrototypeTail<T, Delim> = ListNode<(Delim, T)>;
+type DelimitedListPrototypeTail<T, Delim> = ListNode<(Delim, NotEmpty<T>)>;
 
 type DelimitedListPrototype<T, Delim> = ControlFlow<(), (T, DelimitedListPrototypeTail<T, Delim>)>;
 
@@ -1444,7 +1493,7 @@ impl<T: Rule, Delim: Rule> DelegateRule for DelimitedListTailTrailing<T, Delim> 
     }
 }
 
-type DelimitedListTail<T, Delim> = ListNode<(Discard<Delim>, T)>;
+type DelimitedListTail<T, Delim> = ListNode<(Discard<Delim>, NotEmpty<T>)>;
 
 /// Parses a list of `T` separated by `Delim`.
 /// When `TRAIL` is `true`, the list may end with an optional extra `Delim`
@@ -1546,7 +1595,7 @@ where
                 DelimitedListTail::<In, Delim>::parse(cx.by_ref(), next)?.value
             {
                 if !discard {
-                    out.push(X::transform(item));
+                    out.push(X::transform(item.value));
                 }
                 if cx.location() > last_location {
                     last_location = cx.location();
@@ -1607,6 +1656,75 @@ impl<T: Rule, Op: Rule> DelegateRule for InfixChain<T, Op> {
 
     fn from_inner((first, rest): Self::Inner) -> Self {
         Self { first, rest }
+    }
+}
+
+/// Rule that parses as `T`, but rejects if it parses an empty string.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NotEmpty<T> {
+    pub value: T,
+}
+
+impl<T: Rule> NotEmpty<T> {
+    fn adapt_next<Cx: CxType, R>(
+        orig_start: Location,
+        next: &RuleObject<Cx>,
+        block: impl FnOnce(&RuleObject<Cx>) -> R,
+    ) -> R {
+        block(&next.adapt(&|mut cx, state, _| {
+            if state.start > orig_start {
+                next.pre_parse(cx, state)
+            } else {
+                cx.error_at(orig_start);
+                Err(RuleParseFailed {
+                    location: orig_start,
+                })
+            }
+        }))
+    }
+}
+
+impl<T: Rule> Rule for NotEmpty<T> {
+    fn pre_parse<Cx: CxType>(
+        cx: ParseContext<Cx>,
+        state: PreParseState,
+        next: &RuleObject<Cx>,
+    ) -> RuleParseResult<()>
+    where
+        Self: Sized,
+    {
+        Self::adapt_next(state.start, next, |next| T::pre_parse(cx, state, next))
+    }
+
+    fn parse<Cx: CxType>(mut cx: ParseContext<Cx>, next: &RuleObject<Cx>) -> RuleParseResult<Self>
+    where
+        Self: Sized,
+    {
+        let orig_location = cx.location();
+        let value = Self::adapt_next(orig_location, next, |next| T::parse(cx.by_ref(), next))?;
+        if cx.location() > orig_location {
+            Ok(Self { value })
+        } else {
+            cx.error_at(orig_location);
+            Err(RuleParseFailed {
+                location: orig_location,
+            })
+        }
+    }
+
+    fn print_tree(&self, cx: &PrintContext, f: &mut Formatter) -> fmt::Result {
+        self.value.print_tree(cx, f)
+    }
+
+    fn print_name(f: &mut Formatter) -> fmt::Result
+    where
+        Self: Sized,
+    {
+        f.write_str("NotEmpty(")?;
+        T::print_name(f)?;
+        f.write_str(")")?;
+        Ok(())
     }
 }
 

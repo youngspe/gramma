@@ -7,7 +7,8 @@ use core::marker::PhantomData;
 use crate::{internal_prelude::*, Rule};
 
 use super::{
-    CompoundToken, DelimitedList, Discard, DualParse, Empty, Ignore, NotParse, TransformList,
+    CompoundToken, DelimitedList, Discard, DualParse, Empty, Ignore, NotEmpty, NotParse,
+    TransformList,
 };
 
 /// This trait defines the behavior of a transformation.
@@ -249,6 +250,16 @@ impl<Invalid: Rule, Valid: Rule> TransformInto<Valid> for not<Invalid> {
     type Input = NotParse<Invalid, Valid>;
 
     fn transform(input: Self::Input) -> Valid {
+        input.value
+    }
+}
+
+pub struct not_empty;
+
+impl<T> TransformInto<T> for not_empty {
+    type Input = NotEmpty<T>;
+
+    fn transform(input: Self::Input) -> T {
         input.value
     }
 }
