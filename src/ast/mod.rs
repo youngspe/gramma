@@ -1374,7 +1374,7 @@ pub struct ListNode<T> {
 }
 
 impl<T: Rule> DelegateRule for ListNode<T> {
-    type Inner = ControlFlow<(), Partial<T, ControlFlow<(), ListNode<T>>>>;
+    type Inner = ListNext<Partial<NotEmpty<T>, ControlFlow<(), ListNode<T>>>>;
 
     fn print_name(f: &mut Formatter) -> fmt::Result {
         f.write_str("ListNodePlaceholder(")?;
@@ -1386,7 +1386,10 @@ impl<T: Rule> DelegateRule for ListNode<T> {
         Self {
             value: match inner {
                 Break(()) => None,
-                Continue(Partial { value, .. }) => Some(value),
+                Continue(Partial {
+                    value: NotEmpty { value },
+                    ..
+                }) => Some(value),
             },
         }
     }
@@ -1464,28 +1467,27 @@ impl<In: Rule, Out: 'static, X: TransformInto<Out, Input = In> + 'static> Delega
     }
 }
 
-type DelimitedListPrototypeTrailing<T, Delim> =
-    ControlFlow<(), Partial<T, DelimitedListTailTrailing<T, Delim>>>;
-
-type DelimitedListPrototypeTail<T, Delim> = ListNode<(Delim, NotEmpty<T>)>;
-
-type DelimitedListPrototype<T, Delim> = ControlFlow<(), (T, DelimitedListPrototypeTail<T, Delim>)>;
+type ListNext<T> = ControlFlow<(), T>;
 
 #[derive(Debug)]
-struct DelimitedListTailTrailing<T, Delim> {
+struct TrailingListNode<T, Delim> {
     value: Option<T>,
     _delim: PhantomData<Delim>,
 }
 
-impl<T: Rule, Delim: Rule> DelegateRule for DelimitedListTailTrailing<T, Delim> {
-    type Inner = ControlFlow<(), (Discard<Delim>, DelimitedListPrototypeTrailing<T, Delim>)>;
+type TrailingListTail<T, Delim> = ListNext<TrailingListNode<T, Delim>>;
 
-    fn from_inner(inner: Self::Inner) -> Self {
-        let value = match inner {
-            Continue((_, Continue(Partial { value, .. }))) => Some(value),
-            Break(()) | Continue((_, Break(()))) => None,
+impl<T: Rule, Delim: Rule> DelegateRule for TrailingListNode<T, Delim> {
+    type Inner = NotEmpty<(
+        Discard<Delim>,
+        ListNext<(Location, T, Location, ListNext<Partial<(), Self>>)>,
+    )>;
+    fn from_inner(NotEmpty { value: (_, next) }: Self::Inner) -> Self {
+        let value = match next {
+            Continue((_, value, _, Continue(_))) => Some(value),
+            Continue((before, value, after, Break(()))) if after > before => Some(value),
+            Continue((_, _, _, Break(()))) | Break(()) => None,
         };
-
         Self {
             value,
             _delim: PhantomData,
@@ -1493,7 +1495,7 @@ impl<T: Rule, Delim: Rule> DelegateRule for DelimitedListTailTrailing<T, Delim> 
     }
 }
 
-type DelimitedListTail<T, Delim> = ListNode<(Discard<Delim>, NotEmpty<T>)>;
+type StandardListTail<T, Delim> = ListNode<(Discard<Delim>, T)>;
 
 /// Parses a list of `T` separated by `Delim`.
 /// When `TRAIL` is `true`, the list may end with an optional extra `Delim`
@@ -1529,9 +1531,9 @@ where
         Self: Sized,
     {
         if TRAIL {
-            DelimitedListPrototypeTrailing::<In, Delim>::pre_parse(cx, state, next)
+            ListNext::<NotEmpty<(In, TrailingListTail<In, Delim>)>>::pre_parse(cx, state, next)
         } else {
-            DelimitedListPrototype::<In, Delim>::pre_parse(cx, state, next)
+            ListNext::<NotEmpty<(In, StandardListTail<In, Delim>)>>::pre_parse(cx, state, next)
         }
     }
 
@@ -1546,69 +1548,76 @@ where
         let mut out = Vec::new();
         let discard = cx.should_discard();
 
-        let mut i = 0;
+        let push = |item| {
+            if !discard {
+                out.push(X::transform(item))
+            }
+        };
+        let name = DebugFn(Self::print_name);
+
         if TRAIL {
-            let Continue(Partial { value: first, .. }) = ControlFlow::<
-                (),
-                Partial<In, DelimitedListTailTrailing<In, Delim>>,
-            >::parse(cx.by_ref(), next)?
-            else {
-                return Ok(Self::new(out));
+            let get_first = |cx: ParseContext<Cx>, next: &RuleObject<Cx>| {
+                ListNext::<Partial<In, TrailingListTail<In, Delim>>>::parse(cx, next)
+                    .map(|p| p.flat_map(|Partial { value, .. }| Some(value)))
             };
 
-            if !discard {
-                out.push(X::transform(first));
-            }
+            let get_next = |cx: ParseContext<Cx>, next: &RuleObject<Cx>| {
+                TrailingListTail::<In, Delim>::parse(cx, next).map(|p| p.flat_map(|x| x.value))
+            };
 
-            let mut last_location = cx.location();
-
-            while let Some(item) =
-                DelimitedListTailTrailing::<In, Delim>::parse(cx.by_ref(), next)?.value
-            {
-                if !discard {
-                    out.push(X::transform(item));
-                }
-                if cx.location() > last_location {
-                    last_location = cx.location();
-                    i = 0;
-                } else {
-                    i += 1;
-                }
-                assert!(i < 200);
-            }
+            parse_list(&mut cx, next, push, get_first, get_next, &name)?;
         } else {
-            let Continue(Partial { value: first, .. }) = ControlFlow::<
-                (),
-                Partial<In, DelimitedListTail<In, Delim>>,
-            >::parse(cx.by_ref(), next)?
-            else {
-                return Ok(Self::new(out));
+            let get_first = |cx: ParseContext<Cx>, next: &RuleObject<Cx>| {
+                ListNext::<Partial<In, StandardListTail<In, Delim>>>::parse(cx, next)
+                    .map(|p| p.flat_map(|Partial { value, .. }| Some(value)))
             };
 
-            if !discard {
-                out.push(X::transform(first));
-            }
+            let get_next = |cx: ParseContext<Cx>, next: &RuleObject<Cx>| {
+                StandardListTail::<In, Delim>::parse(cx, next).map(|p| p.value.map(|v| v.1))
+            };
 
-            let mut last_location = cx.location();
-
-            while let Some((_, item)) =
-                DelimitedListTail::<In, Delim>::parse(cx.by_ref(), next)?.value
-            {
-                if !discard {
-                    out.push(X::transform(item.value));
-                }
-                if cx.location() > last_location {
-                    last_location = cx.location();
-                    i = 0;
-                } else {
-                    i += 1;
-                }
-                assert!(i < 200);
-            }
+            parse_list(&mut cx, next, push, get_first, get_next, &name)?;
         }
 
         Ok(Self::new(out))
     }
+}
+
+fn parse_list<Cx: CxType, In>(
+    cx: &mut ParseContext<Cx>,
+    next: &RuleObject<Cx>,
+    mut push: impl FnMut(In),
+    get_first: impl FnOnce(ParseContext<Cx>, &RuleObject<Cx>) -> RuleParseResult<Option<In>>,
+    mut get_next: impl FnMut(ParseContext<Cx>, &RuleObject<Cx>) -> RuleParseResult<Option<In>>,
+    name: &dyn fmt::Display,
+) -> Result<(), RuleParseFailed>
+where
+    In: Rule,
+{
+    let start_location = cx.location();
+    let Some(first_item) = get_first(cx.by_ref(), next)? else {
+        return Ok(());
+    };
+
+    let mut last_location = cx.location();
+    let mut next_item = get_next(cx.by_ref(), next)?;
+
+    if cx.location() > start_location {
+        push(first_item);
+    }
+
+    while let Some(item) = next_item {
+        push(item);
+        if cx.location() > last_location {
+            last_location = cx.location();
+        } else {
+            panic!("Zero-width item matched while parsing {name}");
+        }
+
+        next_item = get_next(cx.by_ref(), next)?;
+    }
+
+    Ok(())
 }
 
 /// An operator-operand pair.

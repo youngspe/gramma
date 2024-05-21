@@ -117,6 +117,12 @@ fn non_empty_prefix_list_no_name_no_args_failure() {
 }
 
 #[test]
+fn optional_list_empty_success() {
+    let out = parse_tree::<Vec<Option<(Ignore<Whitespace>, Ident)>>, 1>("").unwrap();
+    assert_eq!(out.len(), 0);
+}
+
+#[test]
 fn optional_list_success() {
     let out = parse_tree::<Vec<Option<(Ignore<Whitespace>, Ident)>>, 1>("a b c").unwrap();
     assert_eq!(out[0].as_ref().unwrap().1 .0, "a");
@@ -131,6 +137,44 @@ fn non_empty_optional_list_success() {
     assert_eq!(out[1].value.as_ref().unwrap().1 .0, "b");
     assert_eq!(out[2].value.as_ref().unwrap().1 .0, "c");
 }
+
+parameterize!(
+    mod delimited {
+        macro delimited($trailing:expr)  {
+        define_rule!(struct IdentList {
+            #[transform(for_each<ignore_before<Whitespace>>, delimited<Option<Semicolon>, $trailing>)]
+            items: Vec<Option<Ident>>,
+        });
+
+        #[test]
+        fn optional_list_delimited_success() {
+            let out = parse_tree::<IdentList, 1>("a;;; b c").unwrap().items;
+            assert_let!([Some(item0), None, None, Some(item1), Some(item2)] = &*out);
+            assert_eq!(item0.0, "a");
+            assert_eq!(item1.0, "b");
+            assert_eq!(item2.0, "c");
+        }
+
+        #[test]
+        fn optional_list_delimited_delimiters_only_success() {
+            let out = parse_tree::<IdentList, 1>(";;;").unwrap().items;
+            assert_eq!(out.len(), 3 + !$trailing as usize);
+        }
+
+        #[test]
+        fn optional_list_delimited_empty_success() {
+            let out = parse_tree::<IdentList, 1>("").unwrap().items;
+            assert_eq!(out.len(), 0);
+        }
+    }
+
+        #[params = delimited(false)]
+        mod delimited_standard;
+
+        #[params = delimited(true)]
+        mod delimited_trailing;
+    }
+);
 
 #[test]
 fn nested_prefix_list_success() {

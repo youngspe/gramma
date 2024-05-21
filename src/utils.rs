@@ -62,10 +62,10 @@ pub(crate) trait MyTry: Sized {
         }
     }
 
-    fn flat_map<C>(
-        self,
-        f: impl FnOnce(Self::Continue) -> WithContinue<Self, C>,
-    ) -> WithContinue<Self, C> {
+    fn flat_map<X>(self, f: impl FnOnce(Self::Continue) -> X) -> X
+    where
+        X: MyTry<Break = Self::Break>,
+    {
         match self.into_ctrl() {
             Continue(c) => f(c),
             Break(b) => MyTry::from_break(b),
@@ -106,15 +106,12 @@ pub(crate) trait MyTry: Sized {
         }
     }
 
-    fn flat_map_break<B>(
-        self,
-        f: impl FnOnce(Self::Break) -> Self::WithBreak<B>,
-    ) -> Self::WithBreak<B>
+    fn flat_map_break<X>(self, f: impl FnOnce(Self::Break) -> X) -> X
     where
-        Self: MapBreak,
+        X: MyTry<Continue = Self::Continue>,
     {
         match self.into_ctrl() {
-            Continue(c) => MyTry::from_continue(c),
+            Continue(c) => X::from_continue(c),
             Break(b) => f(b),
         }
     }
