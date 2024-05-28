@@ -1791,6 +1791,83 @@ impl<Invalid: Rule, Valid: Rule> Rule for NotParse<Invalid, Valid> {
     }
 }
 
+/// Parses the `Ok(_)` branch, falling back to the `Err(_)` branch.
+/// Useful for detecting invalid syntax while continuing to parse the rest of the document.
+/// When processing the AST after it is parsed, check for `Err(_)` values to determine
+/// if a syntax error occurred.
+///
+/// When possible, errors encountered while parsing the `Err(_)` branch are ignored.
+///
+/// # Example
+///
+/// ```
+/// gramma::define_token!(
+///     #[pattern(exact = "(")]
+///     struct LParen;
+///     #[pattern(exact = ")")]
+///     struct RParen;
+///     #[pattern(regex = r"\w+")]
+///     struct Scalar;
+///     #[pattern(regex = r"\s+")]
+///     struct Whitespace;
+/// );
+/// gramma::define_rule!(
+///     #[transform(ignore_around<Whitespace>)]
+///     enum ExprKind {
+///         Group {
+///             open: LParen,
+///             #[transform(ignore_after<Whitespace>)]
+///             content: Content,
+///             close: Result<RParen, ()>,
+///         },
+///         Scalar { scalar: Scalar },
+///     }
+///
+///     struct Expr {
+///         unexpected_close: Result<(), RParen>,
+///         kind: ExprKind,
+///     }
+///
+///     #[transform(ignore_around<Whitespace>)]
+///     struct Content {
+///         exprs: Vec<Expr>,
+///         unexpected_close: Result<(), RParen>,
+///     }
+/// );
+///
+/// let ast = gramma::parse_tree::<Content, 2>(r"
+///     (a (b c)
+/// ").unwrap();
+///
+/// // The above example's outermost group has a missing close parenthesis:
+/// assert!(matches!(ast.exprs[0].kind, ExprKind::Group { close: Err(()), .. }));
+///
+/// let ast = gramma::parse_tree::<Content, 2>(r"
+///     (b c) )
+/// ").unwrap();
+///
+/// // The above example ends with an unexpected close parenthesis:
+/// assert!(matches!(ast, Content { unexpected_close: Err(RParen { .. }), ..}));
+///
+/// let ast = gramma::parse_tree::<Content, 2>(r"
+///     (a (b c))
+/// ").unwrap();
+///
+/// // The above example has balanced parentheses:
+/// assert!(matches!(ast.exprs[0].kind, ExprKind::Group { close: Ok(_), .. }));
+/// assert!(matches!(ast, Content { unexpected_close: Ok(()), ..}));
+/// ```
+impl<Valid: Rule, Invalid: Rule> DelegateRule for Result<Valid, Invalid> {
+    type Inner = Either<Valid, Silent<Invalid>>;
+
+    fn from_inner(inner: Self::Inner) -> Self {
+        match inner {
+            Either::Left(valid) => Ok(valid),
+            Either::Right(Silent { value: invalid }) => Err(invalid),
+        }
+    }
+}
+
 fn extract_actual<'src>(src: &'src str, start: usize) -> &'src str {
     if start >= src.len() {
         return "<end-of-file>";
